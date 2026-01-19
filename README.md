@@ -14,6 +14,7 @@ cp team.json.example team.json
 2. 安装依赖后运行 CLI:
 
 ```bash
+uv pip install -r requirements.txt
 python run.py --help
 ```
 

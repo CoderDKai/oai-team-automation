@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-from src.core import workflow
-
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("run", help="运行主流程")
@@ -13,6 +11,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def run_command(args: argparse.Namespace) -> int:
+    from src.core import workflow
+
     if args.test_email_only:
         workflow.main("test")
         return 0
