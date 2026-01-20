@@ -80,17 +80,6 @@ domains = [
     "zawauk.org", "zumuntahassociationuk.org"
 ]
 
-# ---------- Domain Mail 邮箱配置 ----------
-# 仅当 email_provider = "domainmail" 时生效
-# 基于 Cloudflare Email Worker 的邮箱服务
-[domainmail]
-# API 接口地址
-api_base = "https://your-worker-name.your-account.workers.dev/api"
-# API 密钥 (Bearer Token)
-api_key = "your-api-key"
-# 可用邮箱域名列表，随机选择
-domains = ["example.com", "example.org"]
-
 # ==================== 授权服务选择 ====================
 # 选择使用的授权服务: "crs" / "cpa" / "s2a"
 #   - crs: 原有 CRS 系统，需手动添加账号到 CRS
@@ -102,6 +91,17 @@ auth_provider = "cpa"
 # 开启后，运行时会自动将 team.json 中的 Owner 账号也进行授权入库
 # 注意: 请确保 Team Owner 邮箱可以接收验证码
 include_team_owners = false
+
+# ---------- Domain Mail 邮箱配置 ----------
+# 仅当 email_provider = "domainmail" 时生效
+# 基于 Cloudflare Email Worker 的邮箱服务
+[domainmail]
+# API 接口地址
+api_base = "https://your-worker-name.your-account.workers.dev/api"
+# API 密钥 (Bearer Token)
+api_key = "your-api-key"
+# 可用邮箱域名列表，随机选择
+domains = ["example.com", "example.org"]
 
 # ==================== CRS 服务配置 ====================
 # CRS (Central Registration Service) 用于管理注册账号的中心服务
