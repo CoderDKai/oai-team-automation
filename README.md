@@ -15,22 +15,22 @@ cp team.json.example team.json
 
 ```bash
 uv pip install -r requirements.txt
-python run.py --help
+python main.py --help
 ```
 
 3. 执行主流程:
 
 ```bash
-python run.py run
+python main.py start
 ```
 
 ## 常用命令
 
-- `python run.py run`: 执行主流程
-- `python run.py run --team-index 0`: 仅处理指定 Team
-- `python run.py status`: 查看当前进度
-- `python run.py validate`: 校验配置
-- `python run.py migrate --list`: 查看迁移记录
+- `python main.py start`: 执行主流程
+- `python main.py start --team-index 0`: 仅处理指定 Team
+- `python main.py status`: 查看当前进度
+- `python main.py validate`: 校验配置
+- `python main.py migrate --list`: 查看迁移记录
 
 ## 目录结构
 

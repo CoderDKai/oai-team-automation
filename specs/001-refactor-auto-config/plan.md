@@ -56,7 +56,7 @@ src/
 │   └── s2a/
 └── single/
 
-run.py
+main.py
 config.toml.example
 team.json.example
 

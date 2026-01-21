@@ -2,7 +2,7 @@
 
 | 旧路径 | 新路径 | 说明 |
 | --- | --- | --- |
-| `reference/oai-team-auto-config/run.py` | `src/core/workflow.py` + `run.py` | 工作流与 CLI 入口拆分 |
+| `reference/oai-team-auto-config/run.py` | `src/core/workflow.py` + `main.py` | 工作流与 CLI 入口拆分 |
 | `reference/oai-team-auto-config/src/core/config.py` | `src/core/config.py` | 配置加载 |
 | `reference/oai-team-auto-config/src/core/logger.py` | `src/core/logger.py` | 日志输出 |
 | `reference/oai-team-auto-config/src/core/utils.py` | `src/core/utils.py` | 通用工具 |

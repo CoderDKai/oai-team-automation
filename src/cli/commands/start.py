@@ -4,13 +4,13 @@ import argparse
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser("run", help="运行主流程")
+    parser = subparsers.add_parser("start", help="启动主流程")
     parser.add_argument("--team-index", type=int, help="仅处理指定 Team 索引")
     parser.add_argument("--test-email-only", action="store_true", help="仅测试邮箱")
-    parser.set_defaults(func=run_command)
+    parser.set_defaults(func=start_command)
 
 
-def run_command(args: argparse.Namespace) -> int:
+def start_command(args: argparse.Namespace) -> int:
     from src.core import workflow
 
     if args.test_email_only:

@@ -31,7 +31,7 @@
 - [X] T007 Define domain models in `src/core/models.py`
 - [X] T008 Implement migration record store in `src/core/migration_store.py`
 - [X] T009 Implement CLI framework skeleton in `src/cli/main.py` and `src/cli/commands/__init__.py`
-- [X] T010 Wire CLI entrypoint in `run.py`
+- [X] T010 Wire CLI entrypoint in `main.py`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -51,7 +51,7 @@
 - [X] T014 [P] [US1] Port browser automation to `src/automation/browser.py`
 - [X] T015 [P] [US1] Port auth services to `src/auth/crs/client.py`, `src/auth/cpa/client.py`, `src/auth/s2a/client.py`
 - [X] T016 [US1] Implement workflow orchestration in `src/core/workflow.py`
-- [X] T017 [US1] Implement CLI commands in `src/cli/commands/run.py` and `src/cli/commands/status.py`
+- [X] T017 [US1] Implement CLI commands in `src/cli/commands/start.py` and `src/cli/commands/status.py`
 - [X] T018 [US1] Update entrypoints and module map in `docs/migration/README.md`
 
 **Checkpoint**: User Story 1 should be fully functional and independently verifiable

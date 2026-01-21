@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from src.cli.commands import migrate as migrate_cmd
-from src.cli.commands import run as run_cmd
+from src.cli.commands import start as start_cmd
 from src.cli.commands import status as status_cmd
 from src.cli.commands import validate as validate_cmd
 
@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oai-team-auto-config")
     subparsers = parser.add_subparsers(dest="command")
 
-    run_cmd.add_parser(subparsers)
+    start_cmd.add_parser(subparsers)
     status_cmd.add_parser(subparsers)
     validate_cmd.add_parser(subparsers)
     migrate_cmd.add_parser(subparsers)
