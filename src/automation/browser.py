@@ -1133,11 +1133,18 @@ def register_openai_account(page, email: str, password: str) -> bool:
                 log.error("无法找到验证码输入框")
                 return False
 
-            # 清空并输入验证码
+            # 清空并输入验证码 (使用多种方式确保清空)
             try:
-                code_input.clear()
+                # 方式1: 先点击输入框获取焦点
+                code_input.click()
+                time.sleep(0.1)
+                # 方式2: 全选 + 删除
+                code_input.input("", clear=True)
+                time.sleep(0.1)
             except Exception:
                 pass
+
+            # 使用 type_slowly 输入验证码 (内部也会 clear=True)
             type_slowly(
                 page,
                 'css:input[name="code"], input[placeholder*="代码"]',
@@ -1494,8 +1501,12 @@ def perform_codex_authorization(page, email: str, password: str) -> dict:
             )
 
         if code_input:
+            # 清空并输入验证码 (使用多种方式确保清空)
             try:
-                code_input.clear()
+                code_input.click()
+                time.sleep(0.1)
+                code_input.input("", clear=True)
+                time.sleep(0.1)
             except Exception:
                 pass
             type_slowly(
@@ -1757,11 +1768,17 @@ def perform_codex_authorization_with_otp(page, email: str) -> dict:
                 )
 
             if code_input:
-                # 清空并输入验证码
+                # 清空并输入验证码 (使用多种方式确保清空)
                 try:
-                    code_input.clear()
+                    # 方式1: 先点击输入框获取焦点
+                    code_input.click()
+                    time.sleep(0.1)
+                    # 方式2: 全选 + 删除
+                    code_input.input("", clear=True)
+                    time.sleep(0.1)
                 except Exception:
                     pass
+                # 使用 type_slowly 输入验证码 (内部也会 clear=True)
                 type_slowly(
                     page,
                     'css:input[name="otp"], input[type="text"], input[autocomplete="one-time-code"]',
@@ -2373,8 +2390,12 @@ def perform_cpa_authorization_with_otp(page, email: str) -> bool:
                 )
 
             if code_input:
+                # 清空并输入验证码 (使用多种方式确保清空)
                 try:
-                    code_input.clear()
+                    code_input.click()
+                    time.sleep(0.1)
+                    code_input.input("", clear=True)
+                    time.sleep(0.1)
                 except Exception:
                     pass
                 type_slowly(
@@ -2700,8 +2721,12 @@ def login_and_get_session(
 
                 if code_input:
                     log.step(f"输入验证码: {verification_code}")
+                    # 清空并输入验证码 (使用多种方式确保清空)
                     try:
-                        code_input.clear()
+                        code_input.click()
+                        time.sleep(0.1)
+                        code_input.input("", clear=True)
+                        time.sleep(0.1)
                     except Exception:
                         pass
                     type_slowly(
