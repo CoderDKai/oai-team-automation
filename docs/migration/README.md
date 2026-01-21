@@ -22,7 +22,7 @@
 - `src/automation/`: 浏览器自动化
 - `src/auth/`: CRS/CPA/S2A 授权客户端
 - `src/single/`: 单人/批量脚本入口 (逐步迁移)
-- `run.py`: CLI 入口脚本
+- `main.py`: CLI 入口脚本
 
 ## 模块映射
 
@@ -34,7 +34,7 @@
 | `reference/oai-team-auto-config/src/crs/crs_service.py` | `src/auth/crs/client.py` | CRS 授权 |
 | `reference/oai-team-auto-config/src/cpa/cpa_service.py` | `src/auth/cpa/client.py` | CPA 授权 |
 | `reference/oai-team-auto-config/src/s2a/s2a_service.py` | `src/auth/s2a/client.py` | S2A 授权 |
-| `reference/oai-team-auto-config/run.py` | `src/core/workflow.py` | 工作流编排 |
+| `reference/oai-team-auto-config/run.py` | `main.py` | CLI 入口与工作流编排入口 |
 
 ## 使用建议
 

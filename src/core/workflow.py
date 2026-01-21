@@ -882,7 +882,7 @@ def main(command: str | None = None, team_index: int | None = None):
         if command == "status":
             return show_status()
         log.error(f"未知参数: {command}")
-        log.info("用法: python run.py [test|single N|status]")
+        log.info("用法: python main.py [test|single N|status]")
         return None
 
     # 默认运行

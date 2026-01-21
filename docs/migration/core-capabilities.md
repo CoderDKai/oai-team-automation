@@ -9,4 +9,4 @@
 | auth-cpa | CPA 授权 | `src/auth/cpa/client.py` | CPA 授权与回调处理 | active |
 | auth-s2a | S2A 授权 | `src/auth/s2a/client.py` | S2A 授权与入库 | active |
 | workflow | 工作流编排 | `src/core/workflow.py` | 统一编排核心流程 | active |
-| cli | CLI 入口 | `run.py` | 命令行调度入口 | active |
+| cli | CLI 入口 | `main.py` | 命令行调度入口 | active |
