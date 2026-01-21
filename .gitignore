@@ -17,6 +17,7 @@ Thumbs.db
 config.toml
 team.json
 team_tracker.json
+accounts.csv
 
 # Reference directory (legacy code)
 reference/
