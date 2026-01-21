@@ -16,6 +16,40 @@ LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB
 LOG_BACKUP_COUNT = 5  # 保留 5 个备份
 
 
+def _parse_bool_env(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _parse_step_targets(value: str) -> set[int]:
+    targets: set[int] = set()
+    for chunk in value.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            start_str, end_str = chunk.split("-", 1)
+            try:
+                start = int(start_str.strip())
+                end = int(end_str.strip())
+            except ValueError:
+                continue
+            if start <= 0 or end <= 0:
+                continue
+            if start <= end:
+                targets.update(range(start, end + 1))
+            else:
+                targets.update(range(end, start + 1))
+        else:
+            try:
+                number = int(chunk)
+            except ValueError:
+                continue
+            if number > 0:
+                targets.add(number)
+    return targets
+
+
 def _ensure_log_dir():
     """确保日志目录存在"""
     LOG_DIR.mkdir(exist_ok=True)
@@ -118,6 +152,9 @@ class Logger:
         self.name = name
         self.use_color = use_color
         self.enable_file_log = enable_file_log
+        self._step_counter = 0
+        self._step_pause_each = _parse_bool_env("STEP_PAUSE_EACH")
+        self._step_stop_at = _parse_step_targets(os.environ.get("STEP_STOP_AT", ""))
 
         # 从环境变量读取日志级别，默认 INFO
         if level is None:
@@ -209,9 +246,18 @@ class Logger:
 
     def step(self, msg: str, indent: int = 0):
         """步骤日志 (INFO 级别)"""
+        self._step_counter += 1
+        step_number = self._step_counter
         prefix = "  " * indent
         extra = {"icon": ""}
-        self._logger.info(f"{prefix}-> {msg}", extra=extra)
+        self._logger.info(f"{prefix}[step {step_number}] -> {msg}", extra=extra)
+        if self._step_pause_each or step_number in self._step_stop_at:
+            try:
+                input("Press Enter to continue...")
+            except EOFError:
+                self._logger.warning(
+                    "No interactive input detected; continuing.", extra=extra
+                )
 
     def verbose(self, msg: str, indent: int = 0):
         """详细日志 (DEBUG 级别)"""

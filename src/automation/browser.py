@@ -1133,11 +1133,18 @@ def register_openai_account(page, email: str, password: str) -> bool:
                 log.error("无法找到验证码输入框")
                 return False
 
-            # 清空并输入验证码
+            # 清空并输入验证码 (使用多种方式确保清空)
             try:
-                code_input.clear()
+                # 方式1: 先点击输入框获取焦点
+                code_input.click()
+                time.sleep(0.1)
+                # 方式2: 全选 + 删除
+                code_input.input("", clear=True)
+                time.sleep(0.1)
             except Exception:
                 pass
+
+            # 使用 type_slowly 输入验证码 (内部也会 clear=True)
             type_slowly(
                 page,
                 'css:input[name="code"], input[placeholder*="代码"]',
@@ -1185,9 +1192,10 @@ def register_openai_account(page, email: str, password: str) -> bool:
                         if resend_btn:
                             resend_btn.click()
                             log.info("已点击重新发送，等待新验证码...")
-                            time.sleep(3)
+                            # 等待10秒让新邮件到达，避免获取到旧验证码
+                            time.sleep(10)
 
-                            # 重新获取验证码
+                            # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
                             verification_code, error, email_time = (
                                 unified_get_verification_code(email)
                             )
@@ -1494,8 +1502,12 @@ def perform_codex_authorization(page, email: str, password: str) -> dict:
             )
 
         if code_input:
+            # 清空并输入验证码 (使用多种方式确保清空)
             try:
-                code_input.clear()
+                code_input.click()
+                time.sleep(0.1)
+                code_input.input("", clear=True)
+                time.sleep(0.1)
             except Exception:
                 pass
             type_slowly(
@@ -1757,11 +1769,17 @@ def perform_codex_authorization_with_otp(page, email: str) -> dict:
                 )
 
             if code_input:
-                # 清空并输入验证码
+                # 清空并输入验证码 (使用多种方式确保清空)
                 try:
-                    code_input.clear()
+                    # 方式1: 先点击输入框获取焦点
+                    code_input.click()
+                    time.sleep(0.1)
+                    # 方式2: 全选 + 删除
+                    code_input.input("", clear=True)
+                    time.sleep(0.1)
                 except Exception:
                     pass
+                # 使用 type_slowly 输入验证码 (内部也会 clear=True)
                 type_slowly(
                     page,
                     'css:input[name="otp"], input[type="text"], input[autocomplete="one-time-code"]',
@@ -1808,9 +1826,10 @@ def perform_codex_authorization_with_otp(page, email: str) -> dict:
                         if resend_btn:
                             resend_btn.click()
                             log.info("已点击重新发送，等待新验证码...")
-                            time.sleep(3)
+                            # 等待10秒让新邮件到达，避免获取到旧验证码
+                            time.sleep(10)
 
-                            # 重新获取验证码
+                            # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
                             verification_code, error, email_time = (
                                 unified_get_verification_code(email)
                             )
@@ -2373,8 +2392,12 @@ def perform_cpa_authorization_with_otp(page, email: str) -> bool:
                 )
 
             if code_input:
+                # 清空并输入验证码 (使用多种方式确保清空)
                 try:
-                    code_input.clear()
+                    code_input.click()
+                    time.sleep(0.1)
+                    code_input.input("", clear=True)
+                    time.sleep(0.1)
                 except Exception:
                     pass
                 type_slowly(
@@ -2418,7 +2441,9 @@ def perform_cpa_authorization_with_otp(page, email: str) -> bool:
                         if resend_btn:
                             resend_btn.click()
                             log.info("已点击重新发送，等待新验证码...")
-                            time.sleep(3)
+                            # 等待10秒让新邮件到达，避免获取到旧验证码
+                            time.sleep(10)
+                            # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
                             verification_code, error, email_time = (
                                 unified_get_verification_code(email)
                             )
@@ -2700,8 +2725,12 @@ def login_and_get_session(
 
                 if code_input:
                     log.step(f"输入验证码: {verification_code}")
+                    # 清空并输入验证码 (使用多种方式确保清空)
                     try:
-                        code_input.clear()
+                        code_input.click()
+                        time.sleep(0.1)
+                        code_input.input("", clear=True)
+                        time.sleep(0.1)
                     except Exception:
                         pass
                     type_slowly(
@@ -2779,12 +2808,20 @@ def _check_and_select_team_workspace_dialog(page) -> bool:
 
         log.info("检测到团队工作空间选择弹框")
 
-        # 查找第一个团队选项（不是 "Personal account"）
-        # 根据HTML结构，团队选项是 button[role="radio"]
-        radio_buttons = dialog.eles('css:button[role="radio"]')
+        # 查找工作空间选项按钮
+        # 优先使用 class 选择器: button.group.__menu-item (同时具有 group 和 __menu-item 类)
+        menu_buttons = dialog.eles('css:button.group.__menu-item')
+        if not menu_buttons:
+            # 备选: 使用 role="radio" 选择器
+            menu_buttons = dialog.eles('css:button[role="radio"]')
 
+        if not menu_buttons:
+            log.warning("未找到工作空间选项按钮")
+            return False
+
+        # 选择第一个非 "Personal account" 的工作空间
         team_button = None
-        for btn in radio_buttons:
+        for btn in menu_buttons:
             btn_text = btn.text.lower()
             # 跳过 "Personal account" 选项
             if "personal account" not in btn_text and "个人账号" not in btn_text:
@@ -2792,13 +2829,23 @@ def _check_and_select_team_workspace_dialog(page) -> bool:
                 break
 
         if team_button:
-            log.step(f"选择团队工作空间: {team_button.text.split()[0]}")
+            workspace_name = team_button.text.split("\n")[0] if team_button.text else "Unknown"
+            log.step(f"选择团队工作空间: {workspace_name}")
             team_button.click()
-            time.sleep(1.5)
+            time.sleep(2)  # 等待工作空间切换完成
             log.success("已选择团队工作空间")
             return True
         else:
-            log.warning("未找到团队工作空间选项")
+            # 如果所有选项都是 Personal account，选择第一个
+            if menu_buttons:
+                log.warning("未找到团队工作空间，选择第一个可用选项")
+                first_btn = menu_buttons[0]
+                workspace_name = first_btn.text.split("\n")[0] if first_btn.text else "Unknown"
+                log.step(f"选择工作空间: {workspace_name}")
+                first_btn.click()
+                time.sleep(2)
+                return True
+            log.warning("未找到任何工作空间选项")
             return False
 
     except Exception as e:
