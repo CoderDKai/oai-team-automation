@@ -83,6 +83,8 @@ def poll_with_retry(
     fast_interval: int = 1,
     description: str = "轮询",
     on_progress: Callable[[float], None] = None,
+    fibonacci_backoff: bool = False,
+    backoff_max: int = 60,
 ) -> PollResult:
     """通用轮询重试函数
 
@@ -95,6 +97,8 @@ def poll_with_retry(
         fast_interval: 快速轮询间隔 (秒)
         description: 描述信息 (用于日志)
         on_progress: 进度回调函数，参数为已用时间 (秒)
+        fibonacci_backoff: 是否使用斐波那契退避模式 (3, 5, 8, 13, 21, ...)
+        backoff_max: 斐波那契退避最大间隔 (秒)，默认 60 秒
 
     Returns:
         PollResult: 轮询结果
@@ -103,6 +107,11 @@ def poll_with_retry(
         max_retries = VERIFICATION_CODE_MAX_RETRIES
     if interval is None:
         interval = VERIFICATION_CODE_INTERVAL
+
+    # 预计算斐波那契数列 (从 3, 5 开始: 3, 5, 8, 13, 21, 34, 55, ...)
+    fibonacci_seq = [3, 5]
+    while fibonacci_seq[-1] < backoff_max:
+        fibonacci_seq.append(fibonacci_seq[-1] + fibonacci_seq[-2])
 
     start_time = time.time()
     progress_shown = False
@@ -128,8 +137,13 @@ def poll_with_retry(
             log.warning(f"{description}异常: {e}")
 
         if i < max_retries - 1:
-            # 动态间隔: 前 fast_retries 次使用快速间隔
-            wait_time = fast_interval if i < fast_retries else interval
+            if fibonacci_backoff:
+                # 斐波那契退避: 3, 5, 8, 13, 21, ...，但不超过 backoff_max
+                fib_index = min(i, len(fibonacci_seq) - 1)
+                wait_time = min(fibonacci_seq[fib_index], backoff_max)
+            else:
+                # 动态间隔: 前 fast_retries 次使用快速间隔
+                wait_time = fast_interval if i < fast_retries else interval
 
             elapsed = time.time() - start_time
             if on_progress:
@@ -365,22 +379,39 @@ class GPTMailService:
             return None, "未能获取验证码", None
 
     def _extract_code(self, text: str) -> str:
-        """从文本中提取验证码"""
+        """从文本中提取验证码 (优先匹配有上下文的验证码)
+
+        Args:
+            text: 邮件正文文本
+
+        Returns:
+            str: 提取到的验证码，或 None
+        """
         if not text:
             return None
 
-        patterns = [
+        # 优先使用带上下文的正则模式 (避免匹配邮箱地址中的数字)
+        patterns_with_context = [
             r"代码为\s*(\d{6})",
             r"code is\s*(\d{6})",
             r"verification code[:\s]*(\d{6})",
             r"验证码[：:\s]*(\d{6})",
-            r"\b(\d{6})\b",
+            r"Your code is[:\s]*(\d{6})",
+            r"one-time code[:\s]*(\d{6})",
+            r"一次性验证码[：:\s]*(\d{6})",
         ]
 
-        for pattern in patterns:
+        for pattern in patterns_with_context:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 return match.group(1)
+
+        # 备用方案: 匹配独立的6位数字 (排除邮箱地址中的数字)
+        # 先移除邮箱地址，避免误匹配
+        text_cleaned = re.sub(r'\S+@\S+', '', text)
+        match = re.search(r'\b(\d{6})\b', text_cleaned)
+        if match:
+            return match.group(1)
 
         return None
 
@@ -422,23 +453,52 @@ class DomainMailService:
             return None, str(e)
 
     def get_emails(
-        self, address: str, page: int = 1, limit: int = 20
+        self, address: str, page: int = 1, limit: int = 20, unread: bool = None
     ) -> tuple[list, str]:
+        """获取邮箱的邮件列表
+
+        Args:
+            address: 邮箱地址
+            page: 页码
+            limit: 每页数量
+            unread: 筛选未读邮件 (True=仅未读, False=仅已读, None=全部)
+
+        Returns:
+            tuple: (emails, error) - 邮件列表和错误信息
+        """
         url = f"{self.api_base}/mailboxes/{address}/emails"
         params = {"page": page, "limit": limit}
+        if unread is not None:
+            # API 使用布尔值字符串 "true"/"false"
+            params["unread"] = "true" if unread else "false"
 
         try:
             response = http_session.get(
                 url, headers=self.headers, params=params, timeout=REQUEST_TIMEOUT
             )
-            data = response.json()
 
-            if response.status_code == 200:
-                emails = data.get("data", [])
-                return emails, None
-            else:
-                error = data.get("message", "Unknown error")
+            # 检查响应内容类型和状态
+            content_type = response.headers.get("Content-Type", "")
+            if response.status_code != 200:
+                # 尝试解析错误响应
+                try:
+                    data = response.json()
+                    error = data.get("message", f"HTTP {response.status_code}")
+                except Exception:
+                    error = f"HTTP {response.status_code}: {response.text[:200]}"
                 return [], error
+
+            # 正常响应
+            try:
+                data = response.json()
+            except Exception as json_err:
+                # JSON 解析失败，打印原始响应帮助调试
+                log.warning(f"JSON 解析失败: {json_err}")
+                log.warning(f"原始响应 (前200字符): {response.text[:200]}")
+                return [], f"JSON 解析失败: {json_err}"
+
+            emails = data.get("data", [])
+            return emails, None
 
         except Exception as e:
             log.warning(f"DomainMail 获取邮件列表异常: {e}")
@@ -463,34 +523,96 @@ class DomainMailService:
             log.warning(f"DomainMail 获取邮件详情异常: {e}")
             return {}, str(e)
 
-    def _extract_code(self, text: str) -> str:
+    def mark_email_as_read(self, email_id: str) -> tuple[bool, str]:
+        """将邮件标记为已读
+
+        Args:
+            email_id: 邮件ID
+
+        Returns:
+            tuple: (success, error) - 是否成功和错误信息
+        """
+        url = f"{self.api_base}/emails/{email_id}"
+        payload = {"isRead": True}
+
+        try:
+            response = http_session.patch(
+                url, headers=self.headers, json=payload, timeout=REQUEST_TIMEOUT
+            )
+            data = response.json()
+
+            if response.status_code == 200:
+                return True, None
+            else:
+                error = data.get("message", "Unknown error")
+                return False, error
+
+        except Exception as e:
+            log.warning(f"DomainMail 标记已读异常: {e}")
+            return False, str(e)
+
+    def _extract_code_from_body(self, text: str) -> str:
+        """从邮件正文中提取验证码 (优先匹配有上下文的验证码)
+
+        Args:
+            text: 邮件正文文本
+
+        Returns:
+            str: 提取到的验证码，或 None
+        """
         if not text:
             return None
 
-        patterns = [
+        # 优先使用带上下文的正则模式 (避免匹配邮箱地址中的数字)
+        patterns_with_context = [
             r"代码为\s*(\d{6})",
             r"code is\s*(\d{6})",
             r"verification code[:\s]*(\d{6})",
             r"验证码[：:\s]*(\d{6})",
-            r"\b(\d{6})\b",
+            r"Your code is[:\s]*(\d{6})",
+            r"one-time code[:\s]*(\d{6})",
+            r"一次性验证码[：:\s]*(\d{6})",
         ]
 
-        for pattern in patterns:
+        for pattern in patterns_with_context:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 return match.group(1)
 
+        # 备用方案: 匹配独立的6位数字 (排除邮箱地址中的数字)
+        # 先移除邮箱地址，避免误匹配
+        text_cleaned = re.sub(r'\S+@\S+', '', text)
+        match = re.search(r'\b(\d{6})\b', text_cleaned)
+        if match:
+            return match.group(1)
+
         return None
+
+    def _extract_code(self, text: str) -> str:
+        """从文本中提取验证码 (兼容旧接口)"""
+        return self._extract_code_from_body(text)
 
     def get_verification_code(
         self, address: str, max_retries: int = None, interval: int = None
     ) -> tuple[str, str, str]:
+        """从邮箱获取验证码 (仅获取未读邮件，获取成功后标记为已读)
+
+        Args:
+            address: 邮箱地址
+            max_retries: 最大重试次数
+            interval: 轮询间隔 (秒)
+
+        Returns:
+            tuple: (code, error, email_time) - 验证码、错误信息、邮件时间
+        """
         log.info(f"DomainMail 等待验证码邮件: {address}", icon="email")
 
         email_time_holder = [None]
+        email_id_holder = [None]  # 用于存储邮件ID，便于后续标记已读
 
         def fetch_emails():
-            emails, error = self.get_emails(address, page=1, limit=10)
+            # 仅获取未读邮件，避免获取到旧验证码
+            emails, error = self.get_emails(address, page=1, limit=10, unread=True)
             return emails if emails else None
 
         def check_for_code(emails):
@@ -500,20 +622,26 @@ class DomainMailService:
                 snippet = email_item.get("snippet", "")
                 email_time_holder[0] = email_item.get("receivedAt", "")
 
-                code = self._extract_code(subject)
+                # 从主题提取验证码 (主题一般不包含邮箱地址)
+                code = self._extract_code_from_body(subject)
                 if code:
+                    email_id_holder[0] = email_id
                     return code
 
-                code = self._extract_code(snippet)
+                # 从摘要提取验证码 (摘要可能包含发件人信息，需要过滤)
+                code = self._extract_code_from_body(snippet)
                 if code:
+                    email_id_holder[0] = email_id
                     return code
 
+                # 从邮件详情的正文提取验证码 (更准确)
                 if email_id:
                     detail, error = self.get_email_detail(email_id)
                     if detail:
                         text_body = detail.get("textBody", "")
-                        code = self._extract_code(text_body)
+                        code = self._extract_code_from_body(text_body)
                         if code:
+                            email_id_holder[0] = email_id
                             return code
 
             return None
@@ -524,14 +652,60 @@ class DomainMailService:
             max_retries=max_retries,
             interval=interval,
             description="DomainMail 获取邮件",
+            fibonacci_backoff=True,  # 使用斐波那契退避模式 (3, 5, 8, 13, 21, ...)
+            backoff_max=60,  # 最大等待时间 60 秒
         )
 
         if result.success:
             log.success(f"DomainMail 验证码获取成功: {result.data}")
+            # 获取成功后，将邮件标记为已读
+            if email_id_holder[0]:
+                success, error = self.mark_email_as_read(email_id_holder[0])
+                if success:
+                    log.info("邮件已标记为已读", icon="check")
+                else:
+                    log.warning(f"标记已读失败: {error}")
             return result.data, None, email_time_holder[0]
         else:
             log.error(f"DomainMail 验证码获取失败 ({result.error})")
             return None, "未能获取验证码", None
+
+    def get_verification_code_with_retry(
+        self,
+        address: str,
+        max_retries: int = None,
+        interval: int = None,
+        retry_on_fail: bool = True,
+        retry_wait: int = 10,
+    ) -> tuple[str, str, str]:
+        """获取验证码，支持验证码错误后的额外重试
+
+        此方法供外部调用，当验证码输入失败时，可以等待后再次获取新验证码。
+
+        Args:
+            address: 邮箱地址
+            max_retries: 最大重试次数
+            interval: 轮询间隔 (秒)
+            retry_on_fail: 是否在失败时重试
+            retry_wait: 重试前等待时间 (秒)
+
+        Returns:
+            tuple: (code, error, email_time) - 验证码、错误信息、邮件时间
+        """
+        code, error, email_time = self.get_verification_code(
+            address, max_retries, interval
+        )
+
+        if code:
+            return code, error, email_time
+
+        # 第一次获取失败，且启用了重试
+        if retry_on_fail and not code:
+            log.info(f"等待 {retry_wait} 秒后重新尝试获取验证码...", icon="wait")
+            time.sleep(retry_wait)
+            return self.get_verification_code(address, max_retries, interval)
+
+        return code, error, email_time
 
 
 domainmail_service = DomainMailService()
@@ -639,16 +813,32 @@ def get_verification_code(
         return None
 
     def extract_code_from_subject(subject: str) -> str:
-        """从主题中提取验证码"""
-        patterns = [
+        """从主题中提取验证码 (优先匹配有上下文的验证码)"""
+        if not subject:
+            return None
+
+        # 优先使用带上下文的正则模式 (避免匹配邮箱地址中的数字)
+        patterns_with_context = [
             r"代码为\s*(\d{6})",
             r"code is\s*(\d{6})",
-            r"\b(\d{6})\b",
+            r"verification code[:\s]*(\d{6})",
+            r"验证码[：:\s]*(\d{6})",
+            r"Your code is[:\s]*(\d{6})",
+            r"one-time code[:\s]*(\d{6})",
+            r"一次性验证码[：:\s]*(\d{6})",
         ]
-        for pattern in patterns:
+
+        for pattern in patterns_with_context:
             match = re.search(pattern, subject, re.IGNORECASE)
             if match:
                 return match.group(1)
+
+        # 备用方案: 匹配独立的6位数字 (排除邮箱地址中的数字)
+        subject_cleaned = re.sub(r'\S+@\S+', '', subject)
+        match = re.search(r'\b(\d{6})\b', subject_cleaned)
+        if match:
+            return match.group(1)
+
         return None
 
     def check_for_code(emails):
