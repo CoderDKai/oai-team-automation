@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oai-team-automation"
+version = "0.1.0"
+description = "Automation toolkit for oai-team configuration and workflows."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "drissionpage>=4.1.1.2",
+  "requests>=2.32.5",
+  "rich>=14.2.0",
+  "tomli>=2.3.0",
+]
