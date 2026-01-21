@@ -1,0 +1,772 @@
+openapi: 3.0.3
+info:
+  title: 邮件管理 API
+  description: |
+    Cloudflare Email Worker 提供的 RESTful API，用于管理邮箱和邮件。
+
+    ## 功能特性
+    - 邮箱账号管理（创建、查询、更新、删除）
+    - 邮件查询和筛选
+    - 邮件状态管理（已读、星标、归档、删除）
+    - 批量操作支持
+
+    ## 认证
+    所有 API 请求必须包含 Bearer Token 认证。
+  version: 1.0.0
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+servers:
+  - url: https://{worker-name}.{account}.workers.dev/api
+    description: Cloudflare Workers 生产环境
+    variables:
+      worker-name:
+        default: domain-email
+        description: Worker 名称
+      account:
+        default: your-account
+        description: Cloudflare 账号标识
+  - url: http://localhost:8787/api
+    description: 本地开发环境
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Health
+    description: 健康检查
+  - name: Mailboxes
+    description: 邮箱账号管理
+  - name: Emails
+    description: 邮件管理
+  - name: Batch Operations
+    description: 批量操作
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: 健康检查
+      description: 检查 API 服务状态
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /mailboxes:
+    get:
+      tags:
+        - Mailboxes
+      summary: 获取邮箱列表
+      description: 获取所有邮箱账号列表
+      operationId: listMailboxes
+      responses:
+        '200':
+          description: 成功返回邮箱列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MailboxWithStats'
+                  total:
+                    type: integer
+                    description: 邮箱总数
+                    example: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      tags:
+        - Mailboxes
+      summary: 创建邮箱
+      description: 创建新的邮箱账号
+      operationId: createMailbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - address
+              properties:
+                address:
+                  type: string
+                  format: email
+                  description: 邮箱地址
+                  example: newuser@example.com
+      responses:
+        '201':
+          description: 邮箱创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mailbox'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /mailboxes/{address}:
+    parameters:
+      - name: address
+        in: path
+        required: true
+        description: 邮箱地址
+        schema:
+          type: string
+          format: email
+        example: user@example.com
+
+    patch:
+      tags:
+        - Mailboxes
+      summary: 更新邮箱设置
+      description: 更新邮箱的启用状态
+      operationId: updateMailbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  description: 是否启用邮箱
+                  example: false
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mailbox'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags:
+        - Mailboxes
+      summary: 删除邮箱
+      description: 删除邮箱及其所有邮件
+      operationId: deleteMailbox
+      responses:
+        '204':
+          description: 删除成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /mailboxes/{address}/emails:
+    parameters:
+      - name: address
+        in: path
+        required: true
+        description: 邮箱地址
+        schema:
+          type: string
+          format: email
+        example: user@example.com
+
+    get:
+      tags:
+        - Emails
+      summary: 获取邮箱的邮件列表
+      description: 获取指定邮箱的邮件列表，支持分页和筛选
+      operationId: listEmails
+      parameters:
+        - name: page
+          in: query
+          description: 页码
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: 每页数量
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: unread
+          in: query
+          description: 筛选未读邮件
+          schema:
+            type: boolean
+        - name: starred
+          in: query
+          description: 筛选星标邮件
+          schema:
+            type: boolean
+        - name: trashed
+          in: query
+          description: 是否显示垃圾箱
+          schema:
+            type: boolean
+            default: false
+        - name: archived
+          in: query
+          description: 是否显示归档
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: 成功返回邮件列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EmailListItem'
+                  page:
+                    type: integer
+                    example: 1
+                  limit:
+                    type: integer
+                    example: 20
+                  total:
+                    type: integer
+                    description: 邮件总数
+                    example: 100
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /mailboxes/{address}/trash:
+    parameters:
+      - name: address
+        in: path
+        required: true
+        description: 邮箱地址
+        schema:
+          type: string
+          format: email
+        example: user@example.com
+
+    delete:
+      tags:
+        - Batch Operations
+      summary: 清空垃圾箱
+      description: 清空指定邮箱的垃圾箱
+      operationId: emptyTrash
+      responses:
+        '200':
+          description: 清空成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
+                    description: 删除的邮件数量
+                    example: 5
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /emails/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: 邮件 ID
+        schema:
+          type: string
+          format: uuid
+        example: 550e8400-e29b-41d4-a716-446655440000
+
+    get:
+      tags:
+        - Emails
+      summary: 获取邮件详情
+      description: 获取单封邮件的完整信息
+      operationId: getEmail
+      responses:
+        '200':
+          description: 成功返回邮件详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    patch:
+      tags:
+        - Emails
+      summary: 更新邮件状态
+      description: 更新邮件的已读、星标、归档、删除状态和标签
+      operationId: updateEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                isRead:
+                  type: boolean
+                  description: 是否已读
+                isStarred:
+                  type: boolean
+                  description: 是否星标
+                isArchived:
+                  type: boolean
+                  description: 是否归档
+                isTrashed:
+                  type: boolean
+                  description: 是否移至垃圾箱
+                labels:
+                  type: array
+                  items:
+                    type: string
+                  description: 标签列表
+                  example: ['work', 'important']
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags:
+        - Emails
+      summary: 永久删除邮件
+      description: 永久删除邮件（不可恢复）
+      operationId: deleteEmail
+      responses:
+        '204':
+          description: 删除成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /emails/batch:
+    patch:
+      tags:
+        - Batch Operations
+      summary: 批量更新邮件状态
+      description: 批量更新多封邮件的状态（最多 50 封）
+      operationId: batchUpdateEmails
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ids
+                - update
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  maxItems: 50
+                  description: 邮件 ID 列表
+                  example:
+                    ['550e8400-e29b-41d4-a716-446655440000', '550e8400-e29b-41d4-a716-446655440001']
+                update:
+                  type: object
+                  properties:
+                    isRead:
+                      type: boolean
+                    isStarred:
+                      type: boolean
+                    isArchived:
+                      type: boolean
+                    isTrashed:
+                      type: boolean
+      responses:
+        '200':
+          description: 批量更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: integer
+                    description: 成功更新的邮件数量
+                    example: 2
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags:
+        - Batch Operations
+      summary: 批量删除邮件
+      description: 批量永久删除多封邮件（最多 50 封）
+      operationId: batchDeleteEmails
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  maxItems: 50
+                  description: 邮件 ID 列表
+                  example:
+                    ['550e8400-e29b-41d4-a716-446655440000', '550e8400-e29b-41d4-a716-446655440001']
+      responses:
+        '200':
+          description: 批量删除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
+                    description: 成功删除的邮件数量
+                    example: 2
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+      description: 使用 API Key 进行认证
+
+  schemas:
+    Mailbox:
+      type: object
+      required:
+        - id
+        - address
+        - enabled
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 邮箱 ID
+          example: 550e8400-e29b-41d4-a716-446655440000
+        address:
+          type: string
+          format: email
+          description: 邮箱地址
+          example: user@example.com
+        enabled:
+          type: boolean
+          description: 是否启用
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          description: 创建时间
+          example: "2026-01-16T10:00:00Z"
+
+    MailboxWithStats:
+      allOf:
+        - $ref: '#/components/schemas/Mailbox'
+        - type: object
+          properties:
+            emailCount:
+              type: integer
+              description: 邮件总数
+              example: 42
+            unreadCount:
+              type: integer
+              description: 未读邮件数
+              example: 5
+
+    EmailListItem:
+      type: object
+      required:
+        - id
+        - mailboxId
+        - from
+        - subject
+        - isRead
+        - isStarred
+        - isArchived
+        - isTrashed
+        - receivedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 邮件 ID
+          example: 550e8400-e29b-41d4-a716-446655440000
+        mailboxId:
+          type: string
+          format: uuid
+          description: 所属邮箱 ID
+          example: 550e8400-e29b-41d4-a716-446655440001
+        from:
+          type: string
+          description: 发件人
+          example: sender@example.com
+        subject:
+          type: string
+          description: 邮件主题
+          example: Important Meeting
+        snippet:
+          type: string
+          description: 邮件摘要（前 200 字符）
+          example: This is a preview of the email content...
+        isRead:
+          type: boolean
+          description: 是否已读
+          example: false
+        isStarred:
+          type: boolean
+          description: 是否星标
+          example: false
+        isArchived:
+          type: boolean
+          description: 是否归档
+          example: false
+        isTrashed:
+          type: boolean
+          description: 是否在垃圾箱
+          example: false
+        hasAttachments:
+          type: boolean
+          description: 是否有附件
+          example: true
+        labels:
+          type: array
+          items:
+            type: string
+          description: 标签列表
+          example: ["work", "important"]
+        receivedAt:
+          type: string
+          format: date-time
+          description: 接收时间
+          example: "2026-01-16T10:00:00Z"
+
+    EmailDetail:
+      allOf:
+        - $ref: '#/components/schemas/EmailListItem'
+        - type: object
+          required:
+            - to
+            - cc
+            - bcc
+            - textBody
+            - htmlBody
+            - headers
+            - attachments
+          properties:
+            to:
+              type: array
+              items:
+                type: string
+              description: 收件人列表
+              example: ["recipient@example.com"]
+            cc:
+              type: array
+              items:
+                type: string
+              description: 抄送列表
+              example: []
+            bcc:
+              type: array
+              items:
+                type: string
+              description: 密送列表
+              example: []
+            textBody:
+              type: string
+              description: 纯文本正文
+              example: "This is the email body in plain text."
+            htmlBody:
+              type: string
+              description: HTML 正文
+              example: "<p>This is the email body in HTML.</p>"
+            headers:
+              type: object
+              additionalProperties:
+                type: string
+              description: 邮件头信息
+              example:
+                Message-ID: "<abc123@example.com>"
+                X-Custom-Header: "custom-value"
+            attachments:
+              type: array
+              items:
+                $ref: '#/components/schemas/Attachment'
+              description: 附件列表
+
+    Attachment:
+      type: object
+      required:
+        - filename
+        - contentType
+        - size
+      properties:
+        filename:
+          type: string
+          description: 文件名
+          example: document.pdf
+        contentType:
+          type: string
+          description: MIME 类型
+          example: application/pdf
+        size:
+          type: integer
+          description: 文件大小（字节）
+          example: 102400
+        contentId:
+          type: string
+          description: Content-ID（用于内联图片）
+          example: image001@example.com
+
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: 错误代码
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          description: 错误描述
+          example: Invalid request parameters
+        details:
+          type: object
+          description: 详细错误信息
+          additionalProperties: true
+
+  responses:
+    Unauthorized:
+      description: 未授权 - API Key 无效或缺失
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: UNAUTHORIZED
+            message: Invalid or missing API key
+
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: NOT_FOUND
+            message: Resource not found
+
+    ValidationError:
+      description: 请求参数验证失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: VALIDATION_ERROR
+            message: Invalid request parameters
+            details:
+              address: "Invalid email format"
+
+    Conflict:
+      description: 资源冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: CONFLICT
+            message: Mailbox already exists
+
+    InternalError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: INTERNAL_ERROR
+            message: An unexpected error occurred

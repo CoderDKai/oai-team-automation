@@ -1,0 +1,314 @@
+openapi: 3.1.0
+info:
+  title: Core Config Migration API
+  version: 0.1.0
+  description: |
+    用于描述核心能力、配置模块、配置项与迁移流程的接口契约。
+servers:
+  - url: https://example.local
+paths:
+  /capabilities:
+    get:
+      summary: 获取核心能力清单
+      responses:
+        '200':
+          description: 核心能力列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Capability'
+  /capabilities/{capability_id}:
+    get:
+      summary: 获取单个核心能力详情
+      parameters:
+        - name: capability_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 核心能力详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capability'
+        '404':
+          description: 未找到
+  /config-modules:
+    get:
+      summary: 获取配置模块列表
+      responses:
+        '200':
+          description: 配置模块列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConfigModule'
+  /config-modules/{module_id}:
+    get:
+      summary: 获取单个配置模块详情
+      parameters:
+        - name: module_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 配置模块详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigModule'
+        '404':
+          description: 未找到
+  /config-items:
+    get:
+      summary: 获取配置项列表
+      parameters:
+        - name: module_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 配置项列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConfigItem'
+    post:
+      summary: 新增或更新配置项
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigItemInput'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigItem'
+        '400':
+          description: 校验失败
+  /migrations/preview:
+    post:
+      summary: 迁移预检
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MigrationRequest'
+      responses:
+        '200':
+          description: 预检结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationPreview'
+  /migrations/execute:
+    post:
+      summary: 执行迁移
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MigrationRequest'
+      responses:
+        '202':
+          description: 迁移任务已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationRecord'
+  /migrations/{migration_id}:
+    get:
+      summary: 获取迁移记录
+      parameters:
+        - name: migration_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 迁移记录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationRecord'
+        '404':
+          description: 未找到
+  /migrations/{migration_id}/verify:
+    post:
+      summary: 迁移验收
+      parameters:
+        - name: migration_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MigrationVerification'
+      responses:
+        '200':
+          description: 验收结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationRecord'
+components:
+  schemas:
+    Capability:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        owner:
+          type: string
+        entrypoint:
+          type: string
+        status:
+          type: string
+          enum: [active, deprecated, legacy]
+      required: [id, name, entrypoint, status]
+    ConfigModule:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        purpose:
+          type: string
+        owner:
+          type: string
+        entrypoint:
+          type: string
+        status:
+          type: string
+          enum: [active, deprecated, legacy]
+      required: [id, name, purpose, entrypoint, status]
+    ConfigItem:
+      type: object
+      properties:
+        id:
+          type: string
+        module_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        scope:
+          type: string
+        constraints:
+          type: string
+        default_value:
+          type: string
+        source:
+          type: string
+          enum: [legacy, refactored]
+        status:
+          type: string
+          enum: [active, deprecated]
+      required: [id, module_id, name, scope, source, status]
+    ConfigItemInput:
+      type: object
+      properties:
+        module_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        scope:
+          type: string
+        constraints:
+          type: string
+        default_value:
+          type: string
+        source:
+          type: string
+          enum: [legacy, refactored]
+      required: [module_id, name, scope, source]
+    MigrationRequest:
+      type: object
+      properties:
+        legacy_reference:
+          type: string
+        target_reference:
+          type: string
+        items:
+          type: array
+          items:
+            type: string
+      required: [legacy_reference, target_reference]
+    MigrationPreview:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, warning]
+        notes:
+          type: array
+          items:
+            type: string
+    MigrationRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        legacy_path:
+          type: string
+        new_path:
+          type: string
+        status:
+          type: string
+          enum: [pending, migrated, verified, failed]
+        verified_by:
+          type: string
+        verified_at:
+          type: string
+          format: date-time
+        notes:
+          type: string
+      required: [id, legacy_path, new_path, status]
+    MigrationVerification:
+      type: object
+      properties:
+        verified_by:
+          type: string
+        notes:
+          type: string
+      required: [verified_by]

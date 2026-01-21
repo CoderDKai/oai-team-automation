@@ -1,0 +1,46 @@
+[
+  {
+    "_comment": "格式1 (旧格式): 通过 https://chatgpt.com/api/auth/session 获取授权信息",
+    "_comment2": "登录 ChatGPT Team 账号后访问此链接获取完整的 session 信息",
+    "user": {
+      "id": "user-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "email": "your-email@example.com",
+      "idp": "auth0",
+      "iat": 0,
+      "mfa": false
+    },
+    "expires": "2026-01-01T00:00:00.000Z",
+    "account": {
+      "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "planType": "team",
+      "structure": "workspace",
+      "workspaceType": null,
+      "organizationId": "org-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "isDelinquent": false,
+      "gracePeriodId": null
+    },
+    "accessToken": "eyJhbGciOiJSUzI1NiIs...(your access token)",
+    "authProvider": "openai"
+  },
+  {
+    "_comment": "格式2 (新格式-有Token): 简化配置，只需邮箱、密码和Token",
+    "_comment2": "适用于已有 accessToken 的情况",
+    "account": "team-owner@example.com",
+    "password": "YourPassword@2025",
+    "token": "eyJhbGciOiJSUzI1NiIs...(your access token)",
+    "authorized": false,
+    "account_id": "",
+    "expires_at": 0,
+    "can_receive_verification_code": true
+  },
+  {
+    "_comment": "格式3 (新格式-无Token): 只需邮箱和密码，程序会自动登录获取Token",
+    "_comment2": "适用于没有 accessToken 的情况，程序启动时会自动登录",
+    "_comment3": "can_receive_verification_code: true=自动从邮箱获取验证码, false=等待用户手动输入",
+    "_comment4": "expires_at: Team订阅过期时间(Unix时间戳)，程序会自动从 /backend-api/me 获取并保存",
+    "account": "team-owner2@example.com",
+    "password": "YourPassword@2025",
+    "expires_at": 0,
+    "can_receive_verification_code": false
+  }
+]

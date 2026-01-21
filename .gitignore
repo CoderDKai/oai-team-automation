@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+*.egg-info/
+logs/
+
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
+
+# Local config and data files
+config.toml
+team.json
+team_tracker.json
+
+# Reference directory (legacy code)
+reference/
