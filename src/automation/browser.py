@@ -1192,9 +1192,10 @@ def register_openai_account(page, email: str, password: str) -> bool:
                         if resend_btn:
                             resend_btn.click()
                             log.info("已点击重新发送，等待新验证码...")
-                            time.sleep(3)
+                            # 等待10秒让新邮件到达，避免获取到旧验证码
+                            time.sleep(10)
 
-                            # 重新获取验证码
+                            # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
                             verification_code, error, email_time = (
                                 unified_get_verification_code(email)
                             )
@@ -1825,9 +1826,10 @@ def perform_codex_authorization_with_otp(page, email: str) -> dict:
                         if resend_btn:
                             resend_btn.click()
                             log.info("已点击重新发送，等待新验证码...")
-                            time.sleep(3)
+                            # 等待10秒让新邮件到达，避免获取到旧验证码
+                            time.sleep(10)
 
-                            # 重新获取验证码
+                            # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
                             verification_code, error, email_time = (
                                 unified_get_verification_code(email)
                             )
@@ -2439,7 +2441,9 @@ def perform_cpa_authorization_with_otp(page, email: str) -> bool:
                         if resend_btn:
                             resend_btn.click()
                             log.info("已点击重新发送，等待新验证码...")
-                            time.sleep(3)
+                            # 等待10秒让新邮件到达，避免获取到旧验证码
+                            time.sleep(10)
+                            # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
                             verification_code, error, email_time = (
                                 unified_get_verification_code(email)
                             )
