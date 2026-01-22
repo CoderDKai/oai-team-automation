@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-from src.core.config import CONFIG_FILE, TEAM_JSON_FILE, get_config_errors
 from src.core.logger import log
 
 
@@ -12,6 +11,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def validate_command(_: argparse.Namespace) -> int:
+    from src.core.config import CONFIG_FILE, TEAM_JSON_FILE, get_config_errors
+
     exit_code = 0
 
     if not CONFIG_FILE.exists():

@@ -119,7 +119,8 @@ def _load_teams() -> list:
 
 # ==================== 加载配置 ====================
 _cfg = _load_toml()
-_raw_teams = _load_teams()
+_raw_teams: list | None = None
+_teams_loaded = False
 
 
 def _parse_team_config(t: dict, index: int) -> dict:
@@ -180,11 +181,34 @@ def _parse_team_config(t: dict, index: int) -> dict:
         }
 
 
-# 转换 team.json 格式为 team_service.py 期望的格式
-TEAMS = []
-for i, t in enumerate(_raw_teams):
-    team_config = _parse_team_config(t, i)
-    TEAMS.append(team_config)
+def _ensure_teams_loaded() -> None:
+    global _raw_teams, _teams_loaded
+    if _teams_loaded:
+        return
+
+    _teams_loaded = True
+    _raw_teams = _load_teams()
+
+    TEAMS.clear()
+    for i, t in enumerate(_raw_teams):
+        team_config = _parse_team_config(t, i)
+        TEAMS.append(team_config)
+
+
+# 转换 team.json 格式为 team_service.py 期望的格式 (延迟加载)
+TEAMS: list[dict] = []
+
+
+def get_teams() -> list[dict]:
+    """获取 Team 列表 (按需加载 team.json)"""
+    _ensure_teams_loaded()
+    return TEAMS
+
+
+def get_raw_teams() -> list:
+    """获取 team.json 原始数据 (按需加载)"""
+    _ensure_teams_loaded()
+    return _raw_teams or []
 
 
 def save_team_json():
@@ -192,6 +216,7 @@ def save_team_json():
 
     仅对新格式的 Team 配置生效
     """
+    _ensure_teams_loaded()
     if not TEAM_JSON_FILE.exists():
         return False
 
@@ -217,7 +242,7 @@ def save_team_json():
 
     try:
         with open(TEAM_JSON_FILE, "w", encoding="utf-8") as f:
-            json.dump(_raw_teams, f, ensure_ascii=False, indent=2)
+            json.dump(get_raw_teams(), f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
         _log_config("ERROR", "team.json", "保存失败", str(e))
@@ -598,14 +623,22 @@ def generate_email_for_user(username: str) -> str:
 
 
 def get_team(index: int = 0) -> dict:
-    return TEAMS[index] if 0 <= index < len(TEAMS) else {}
+    teams = get_teams()
+    return teams[index] if 0 <= index < len(teams) else {}
 
 
 def get_team_by_email(email: str) -> dict:
-    return next((t for t in TEAMS if t.get("user", {}).get("email") == email), {})
+    return next(
+        (t for t in get_teams() if t.get("user", {}).get("email") == email), {}
+    )
 
 
 def get_team_by_org(org_id: str) -> dict:
     return next(
-        (t for t in TEAMS if t.get("account", {}).get("organizationId") == org_id), {}
+        (
+            t
+            for t in get_teams()
+            if t.get("account", {}).get("organizationId") == org_id
+        ),
+        {},
     )

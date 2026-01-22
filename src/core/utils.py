@@ -315,16 +315,17 @@ def add_team_owners_to_tracker(tracker: dict, password: str) -> int:
     Returns:
         int: 添加的数量
     """
-    from src.core.config import INCLUDE_TEAM_OWNERS, TEAMS
+    from src.core.config import INCLUDE_TEAM_OWNERS, get_teams
 
     if not INCLUDE_TEAM_OWNERS:
         return 0
 
-    if not TEAMS:
+    teams = get_teams()
+    if not teams:
         return 0
 
     added_count = 0
-    for team in TEAMS:
+    for team in teams:
         # 跳过没有 token 的 Team（格式3会在登录时单独处理）
         if not team.get("auth_token"):
             continue

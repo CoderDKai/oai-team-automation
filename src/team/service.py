@@ -6,13 +6,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src.core.config import (
-    TEAMS,
     ACCOUNTS_PER_TEAM,
     REQUEST_TIMEOUT,
     USER_AGENT,
     BROWSER_HEADLESS,
     PROXY_ENABLED,
     save_team_json,
+    get_teams,
     get_proxy_dict,
 )
 from src.core.logger import log
@@ -134,7 +134,7 @@ def preload_all_account_ids() -> tuple[int, int]:
     fail_count = 0
 
     # 只处理有 token 的 Team
-    teams_with_token = [t for t in TEAMS if t.get("auth_token")]
+    teams_with_token = [t for t in get_teams() if t.get("auth_token")]
     teams_need_fetch = [t for t in teams_with_token if not t.get("account_id")]
 
     if not teams_need_fetch:
