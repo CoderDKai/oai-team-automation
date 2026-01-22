@@ -11,8 +11,9 @@ from src.core.config import (
     CRS_ADMIN_TOKEN,
     REQUEST_TIMEOUT,
     USER_AGENT,
-    TEAMS,
+    INCLUDE_TEAM_OWNERS,
     PROXY_ENABLED,
+    get_teams,
     get_proxy_dict,
 )
 from src.core.logger import log
@@ -365,19 +366,20 @@ def crs_sync_team_owners() -> int:
     if not INCLUDE_TEAM_OWNERS:
         return 0
 
-    if not TEAMS:
+    teams = get_teams()
+    if not teams:
         log.warning("team.json 为空，无 Team Owner 可同步")
         return 0
 
-    log.info(f"开始同步 {len(TEAMS)} 个 Team Owner 到 CRS...", icon="sync")
+    log.info(f"开始同步 {len(teams)} 个 Team Owner 到 CRS...", icon="sync")
 
     success_count = 0
-    for team in TEAMS:
+    for team in teams:
         raw_data = team.get("raw", {})
         if raw_data:
             result = crs_add_team_owner(raw_data)
             if result:
                 success_count += 1
 
-    log.info(f"Team Owner 同步完成: {success_count}/{len(TEAMS)}", icon="sync")
+    log.info(f"Team Owner 同步完成: {success_count}/{len(teams)}", icon="sync")
     return success_count

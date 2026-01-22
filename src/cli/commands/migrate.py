@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 
 from src.core.logger import log
-from src.core.migration_store import MigrationStore
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -23,6 +22,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def migrate_command(args: argparse.Namespace) -> int:
+    from src.core.migration_store import MigrationStore
+
     store = MigrationStore()
 
     if args.list:

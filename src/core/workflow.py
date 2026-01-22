@@ -17,7 +17,6 @@ import sys
 import atexit
 
 from src.core.config import (
-    TEAMS,
     ACCOUNTS_PER_TEAM,
     DEFAULT_PASSWORD,
     AUTH_PROVIDER,
@@ -25,6 +24,7 @@ from src.core.config import (
     get_domain_from_email,
     is_email_blacklisted,
     save_team_json,
+    get_teams,
     get_next_proxy,
 )
 from src.email.service import batch_create_emails, unified_create_email
@@ -255,7 +255,7 @@ def process_single_team(team: dict) -> tuple[list, list]:
 
 def _get_team_by_name(team_name: str) -> dict:
     """根据名称获取 Team 配置"""
-    for team in TEAMS:
+    for team in get_teams():
         if team["name"] == team_name:
             return team
     return {}
@@ -549,8 +549,10 @@ def run_all_teams():
     """主函数: 遍历所有 Team"""
     global _tracker, _current_results, _shutdown_requested
 
+    teams = get_teams()
+
     log.header("ChatGPT Team 批量注册自动化")
-    log.info(f"共 {len(TEAMS)} 个 Team 待处理", icon="team")
+    log.info(f"共 {len(teams)} 个 Team 待处理", icon="team")
     log.info(f"每个 Team 邀请 {ACCOUNTS_PER_TEAM} 个账号", icon="account")
     log.info(f"统一密码: {DEFAULT_PASSWORD}", icon="code")
     log.info("按 Ctrl+C 可安全退出并保存进度")
@@ -569,7 +571,7 @@ def run_all_teams():
 
     with Timer("全部流程"):
         # ========== 第一阶段: 处理所有 Team 的普通成员 ==========
-        for i, team in enumerate(TEAMS):
+        for i, team in enumerate(teams):
             if _shutdown_requested:
                 log.warning("检测到中断请求，停止处理...")
                 break
@@ -577,7 +579,8 @@ def run_all_teams():
             log.separator("★", 60)
             team_email = team.get("account") or team.get("owner_email", "")
             log.highlight(
-                f"Team {i + 1}/{len(TEAMS)}: {team['name']} ({team_email})", icon="team"
+                f"Team {i + 1}/{len(teams)}: {team['name']} ({team_email})",
+                icon="team",
             )
             log.separator("★", 60)
 
@@ -597,7 +600,7 @@ def run_all_teams():
                     )
 
             # Team 之间的间隔
-            if i < len(TEAMS) - 1 and not _shutdown_requested:
+            if i < len(teams) - 1 and not _shutdown_requested:
                 wait_time = 3
                 log.countdown(wait_time, "下一个 Team")
 
@@ -642,11 +645,12 @@ def run_single_team(team_index: int = 0):
     """
     global _current_results
 
-    if team_index >= len(TEAMS):
-        log.error(f"Team 索引超出范围 (0-{len(TEAMS) - 1})")
+    teams = get_teams()
+    if team_index >= len(teams):
+        log.error(f"Team 索引超出范围 (0-{len(teams) - 1})")
         return
 
-    team = TEAMS[team_index]
+    team = teams[team_index]
     log.info(f"单 Team 模式: {team['name']}", icon="start")
 
     _current_results = []
@@ -677,11 +681,12 @@ def test_email_only():
 
     log.info("测试模式: 仅邮箱创建 + 邀请", icon="debug")
 
-    if len(TEAMS) == 0:
+    teams = get_teams()
+    if len(teams) == 0:
         log.error("没有配置 Team")
         return
 
-    team = TEAMS[0]
+    team = teams[0]
     team_name = team["name"]
     log.step(f"使用 Team: {team_name}")
 
@@ -860,11 +865,14 @@ def main(command: str | None = None, team_index: int | None = None):
             sys.exit(1)
 
     # 2. 分离需要登录和不需要登录的 Team
+    teams = get_teams()
     needs_login_teams = [
-        t for t in TEAMS if t.get("format") == "new" and t.get("needs_login")
+        t for t in teams if t.get("format") == "new" and t.get("needs_login")
     ]
     ready_teams = [
-        t for t in TEAMS if not (t.get("format") == "new" and t.get("needs_login"))
+        t
+        for t in teams
+        if not (t.get("format") == "new" and t.get("needs_login"))
     ]
 
     # 3. 只对已有 token 的 Team 预加载 account_id 和添加到 tracker
