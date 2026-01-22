@@ -5,10 +5,17 @@ import os
 import csv
 import json
 import time
+import tempfile
 from datetime import datetime
 
 from src.core.config import CSV_FILE, TEAM_TRACKER_FILE
 from src.core.logger import log
+
+try:
+    from filelock import FileLock, Timeout
+except Exception:  # pragma: no cover - 兼容无 filelock 环境
+    FileLock = None
+    Timeout = None
 
 
 def save_to_csv(
@@ -51,16 +58,59 @@ def save_to_csv(
     log.info(f"保存到 {CSV_FILE}", icon="save")
 
 
+def _migrate_account_record(account: dict) -> dict:
+    """迁移单个账号记录到新格式 (向后兼容)
+
+    字段映射:
+        status → invitation_status
+        (新增) storage_status
+    """
+    # 如果已经是新格式，直接返回
+    if "invitation_status" in account:
+        # 确保 storage_status 存在
+        if "storage_status" not in account:
+            account["storage_status"] = _init_storage_status()
+        return account
+
+    # 迁移 status → invitation_status
+    if "status" in account:
+        account["invitation_status"] = account.pop("status")
+
+    # 初始化 storage_status
+    if "storage_status" not in account:
+        account["storage_status"] = _init_storage_status()
+
+    return account
+
+
+def _init_storage_status() -> dict:
+    """初始化入库状态结构"""
+    return {
+        "crs": {"status": "not_stored"},
+        "cpa": {"status": "not_stored"},
+        "s2a": {"status": "not_stored"},
+    }
+
+
 def load_team_tracker() -> dict:
-    """加载 Team 追踪记录
+    """加载 Team 追踪记录 (支持新旧格式自动转换)
 
     Returns:
-        dict: {"teams": {"team_name": [{"email": "...", "status": "..."}]}}
+        dict: {"teams": {"team_name": [{"email": "...", "invitation_status": "...", "storage_status": {...}}]}}
     """
     if os.path.exists(TEAM_TRACKER_FILE):
         try:
             with open(TEAM_TRACKER_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                tracker = json.load(f)
+
+            # 自动迁移旧格式数据
+            for team_name in tracker.get("teams", {}):
+                tracker["teams"][team_name] = [
+                    _migrate_account_record(acc)
+                    for acc in tracker["teams"][team_name]
+                ]
+
+            return tracker
         except Exception as e:
             log.warning(f"加载追踪记录失败: {e}")
 
@@ -71,11 +121,55 @@ def save_team_tracker(tracker: dict):
     """保存 Team 追踪记录"""
     tracker["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    lock_path = f"{TEAM_TRACKER_FILE}.lock"
+    if FileLock:
+        try:
+            with FileLock(lock_path, timeout=10):
+                _atomic_write_tracker(TEAM_TRACKER_FILE, tracker)
+        except Timeout:
+            log.warning("保存追踪记录失败: 获取文件锁超时")
+        except Exception as e:
+            log.warning(f"保存追踪记录失败: {e}")
+        return
+
     try:
-        with open(TEAM_TRACKER_FILE, "w", encoding="utf-8") as f:
-            json.dump(tracker, f, ensure_ascii=False, indent=2)
+        _save_tracker_with_fcntl_lock(lock_path, TEAM_TRACKER_FILE, tracker)
     except Exception as e:
         log.warning(f"保存追踪记录失败: {e}")
+
+
+def _atomic_write_tracker(file_path: str, tracker: dict):
+    """原子写入 tracker 数据"""
+    target_dir = os.path.dirname(file_path) or "."
+    base_name = os.path.basename(file_path)
+    fd, temp_path = tempfile.mkstemp(prefix=f".{base_name}.", dir=target_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as temp_file:
+            json.dump(tracker, temp_file, ensure_ascii=False, indent=2)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, file_path)
+    except Exception:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception as cleanup_error:
+            log.warning(f"清理临时文件失败: {cleanup_error}")
+        raise
+
+
+def _save_tracker_with_fcntl_lock(
+    lock_path: str, file_path: str, tracker: dict
+):
+    """使用 fcntl 锁保存 tracker (filelock 不可用时使用)"""
+    import fcntl
+
+    with open(lock_path, "w", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            _atomic_write_tracker(file_path, tracker)
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def add_account_to_tracker(
@@ -87,7 +181,7 @@ def add_account_to_tracker(
         tracker: 追踪记录
         team_name: Team 名称
         email: 邮箱地址
-        status: 状态 (invited/registered/authorized/completed)
+        status: 邀请状态 (invited/registered/authorized/completed)
     """
     if team_name not in tracker["teams"]:
         tracker["teams"][team_name] = []
@@ -95,15 +189,16 @@ def add_account_to_tracker(
     # 检查是否已存在
     for account in tracker["teams"][team_name]:
         if account["email"] == email:
-            account["status"] = status
+            account["invitation_status"] = status
             account["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             return
 
-    # 添加新记录
+    # 添加新记录 (使用新格式)
     tracker["teams"][team_name].append(
         {
             "email": email,
-            "status": status,
+            "invitation_status": status,
+            "storage_status": _init_storage_status(),
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -111,11 +206,11 @@ def add_account_to_tracker(
 
 
 def update_account_status(tracker: dict, team_name: str, email: str, status: str):
-    """更新账号状态"""
+    """更新账号邀请状态"""
     if team_name in tracker["teams"]:
         for account in tracker["teams"][team_name]:
             if account["email"] == email:
-                account["status"] = status
+                account["invitation_status"] = status
                 account["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 return
 
@@ -155,20 +250,21 @@ def get_incomplete_accounts(tracker: dict, team_name: str) -> list:
         team_name: Team 名称
 
     Returns:
-        list: [{"email": "...", "status": "...", "password": "...", "role": "..."}]
+        list: [{"email": "...", "invitation_status": "...", "password": "...", "role": "..."}]
     """
     incomplete = []
     if team_name in tracker.get("teams", {}):
         for account in tracker["teams"][team_name]:
-            status = account.get("status", "")
+            # 支持新旧字段名
+            status = account.get("invitation_status") or account.get("status", "")
             # 只要不是 completed 都算未完成，需要继续处理
             if status != "completed":
                 incomplete.append(
                     {
                         "email": account["email"],
-                        "status": status,
+                        "invitation_status": status,
                         "password": account.get("password", ""),
-                        "role": account.get("role", "member"),  # 包含角色信息
+                        "role": account.get("role", "member"),
                     }
                 )
     return incomplete

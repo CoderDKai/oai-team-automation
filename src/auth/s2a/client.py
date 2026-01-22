@@ -7,6 +7,7 @@
 # - 授权流程: S2A 生成授权 URL -> 用户授权 -> 提交 code 换取 token -> 创建账号
 # - 账号入库: S2A 可一步完成 (create-from-oauth) 或分步完成 (exchange + add_account)
 
+import time
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -463,6 +464,85 @@ def s2a_check_account_exists(email: str, platform: str = "openai") -> bool:
             return True
 
     return False
+
+
+def s2a_query_account(email: str) -> dict:
+    """查询 S2A 入库状态
+
+    Args:
+        email: 账号邮箱
+
+    Returns:
+        {
+            "exists": bool,
+            "account_id": str | None,
+            "account_data": dict | None
+        }
+    """
+    target_email = (email or "").lower()
+    if not target_email:
+        return {"exists": False, "account_id": None, "account_data": None}
+
+    accounts = []
+    headers = build_s2a_headers()
+    max_retries = 3
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = http_session.get(
+                f"{S2A_API_BASE}/admin/accounts",
+                headers=headers,
+                params={"platform": "openai"},
+                timeout=REQUEST_TIMEOUT,
+            )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if attempt < max_retries:
+                delay = 2**attempt
+                log.warning(
+                    f"S2A 账号列表查询异常: {e}，{delay}s 后重试 "
+                    f"({attempt + 1}/{max_retries})"
+                )
+                time.sleep(delay)
+                continue
+            log.error(f"S2A 账号列表查询失败，重试耗尽: {e}")
+            break
+        except Exception as e:
+            log.warning(f"S2A 账号列表查询异常: {e}")
+            break
+
+        if response.status_code != 200:
+            log.warning(f"S2A 账号列表查询失败: HTTP {response.status_code}")
+            break
+
+        try:
+            result = response.json()
+        except Exception as e:
+            log.warning(f"S2A 账号列表解析失败: {e}")
+            break
+
+        if result.get("code") == 0:
+            data = result.get("data", {})
+            if isinstance(data, dict) and "items" in data:
+                accounts = data.get("items", [])
+            elif isinstance(data, list):
+                accounts = data
+            break
+
+        log.warning(f"S2A 账号列表查询失败: {result.get('message', 'Unknown error')}")
+        break
+    for account in accounts:
+        account_name = (account.get("name") or "").lower()
+        credentials = account.get("credentials") or {}
+        account_email = (credentials.get("email") or "").lower()
+
+        if account_name == target_email or account_email == target_email:
+            return {
+                "exists": True,
+                "account_id": account.get("id") or account.get("account_id"),
+                "account_data": account,
+            }
+
+    return {"exists": False, "account_id": None, "account_data": None}
 
 
 # ==================== 工具函数 ====================

@@ -1,6 +1,7 @@
 # ==================== CRS 服务模块 ====================
 # 处理 CRS 系统相关功能 (Codex 授权、账号入库)
 
+import time
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -290,6 +291,72 @@ def crs_check_account_exists(email: str) -> bool:
             return True
 
     return False
+
+
+def crs_query_account(email: str) -> dict:
+    """查询 CRS 入库状态
+
+    Args:
+        email: 账号邮箱
+
+    Returns:
+        {
+            "exists": bool,
+            "account_id": str | None,
+            "account_data": dict | None
+        }
+    """
+    headers = build_crs_headers()
+    accounts = []
+    max_retries = 3
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = http_session.get(
+                f"{CRS_API_BASE}/admin/openai-accounts",
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    accounts = result.get("data", [])
+                else:
+                    log.warning(
+                        f"CRS 账号列表查询失败: {result.get('message', 'Unknown error')}"
+                    )
+                break
+
+            log.warning(f"CRS 账号列表查询失败: HTTP {response.status_code}")
+            break
+
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if attempt < max_retries:
+                delay = 2**attempt
+                log.warning(
+                    f"CRS 账号列表查询异常: {e}，{delay}s 后重试 "
+                    f"({attempt + 1}/{max_retries})"
+                )
+                time.sleep(delay)
+                continue
+            log.error(f"CRS 账号列表查询失败，重试耗尽: {e}")
+            break
+
+        except Exception as e:
+            log.warning(f"获取 CRS 账号列表异常: {e}")
+            break
+    target_email = email.lower()
+
+    for account in accounts:
+        if account.get("name", "").lower() == target_email:
+            return {
+                "exists": True,
+                "account_id": account.get("id"),
+                "account_data": account,
+            }
+
+    return {"exists": False, "account_id": None, "account_data": None}
 
 
 def crs_add_team_owner(team_data: dict) -> dict:
