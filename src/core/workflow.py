@@ -35,9 +35,10 @@ from src.team.service import (
     invite_single_to_team,
     preload_all_account_ids,
 )
-from src.auth.crs.client import crs_add_account, crs_sync_team_owners, crs_verify_token
+from src.auth.crs.client import crs_add_account, crs_verify_token
 from src.auth.cpa.client import cpa_verify_connection
 from src.auth.s2a.client import s2a_verify_connection, s2a_create_account_from_oauth
+from src.auth.token_manager import is_token_expired, refresh_access_token
 from src.automation.browser import (
     register_and_authorize,
     login_and_authorize_with_otp,
@@ -51,19 +52,24 @@ from src.core.utils import (
     add_account_with_password,
     update_account_status,
     remove_account_from_tracker,
-    get_incomplete_accounts,
     get_all_incomplete_accounts,
     print_summary,
     Timer,
     add_team_owners_to_tracker,
 )
 from src.core.logger import log
+from src.core.storage_manager import check_account_stored, update_storage_status
 
 
 # ==================== 全局状态 ====================
 _tracker = None
 _current_results = []
 _shutdown_requested = False
+
+
+def _get_invitation_status(account: dict, default: str = "") -> str:
+    """优先读取 invitation_status，缺失时回退到旧 status 字段。"""
+    return account.get("invitation_status") or account.get("status", default)
 
 
 def _save_state():
@@ -123,13 +129,16 @@ def process_single_team(team: dict) -> tuple[list, list]:
     owner_accounts = [
         acc
         for acc in all_accounts
-        if acc.get("role") == "owner" and acc.get("status") != "completed"
+        if (
+            acc.get("role") == "owner"
+            and _get_invitation_status(acc) != "completed"
+        )
     ]
     member_accounts = [acc for acc in all_accounts if acc.get("role") != "owner"]
 
     # 统计完成数量 (只统计普通成员)
     completed_count = sum(
-        1 for acc in member_accounts if acc.get("status") == "completed"
+        1 for acc in member_accounts if _get_invitation_status(acc) == "completed"
     )
     member_count = len(member_accounts)
 
@@ -161,7 +170,7 @@ def process_single_team(team: dict) -> tuple[list, list]:
 
     # ========== 检查未完成的普通成员账号 ==========
     incomplete_members = [
-        acc for acc in member_accounts if acc.get("status") != "completed"
+        acc for acc in member_accounts if _get_invitation_status(acc) != "completed"
     ]
 
     invited_accounts = []
@@ -170,13 +179,15 @@ def process_single_team(team: dict) -> tuple[list, list]:
         # 有未完成的普通成员账号，优先处理
         log.warning(f"发现 {len(incomplete_members)} 个未完成成员账号:")
         for acc in incomplete_members:
-            log.step(f"{acc['email']} (状态: {acc.get('status', 'unknown')})")
+            log.step(
+                f"{acc['email']} (状态: {_get_invitation_status(acc, 'unknown')})"
+            )
 
         invited_accounts = [
             {
                 "email": acc["email"],
                 "password": acc.get("password", DEFAULT_PASSWORD),
-                "status": acc.get("status", ""),
+                "invitation_status": _get_invitation_status(acc, ""),
                 "role": acc.get("role", "member"),
             }
             for acc in incomplete_members
@@ -227,7 +238,7 @@ def process_single_team(team: dict) -> tuple[list, list]:
                     {
                         "email": acc["email"],
                         "password": acc["password"],
-                        "status": "invited",
+                        "invitation_status": "invited",
                         "role": "member",
                     }
                     for acc in accounts
@@ -238,7 +249,7 @@ def process_single_team(team: dict) -> tuple[list, list]:
 
     # ========== 阶段 3: 处理普通成员 (注册 + Codex 授权 + CRS) ==========
     if invited_accounts:
-        log.section(f"阶段 3: 逐个注册 OpenAI + Codex 授权 + CRS 入库")
+        log.section("阶段 3: 逐个注册 OpenAI + Codex 授权 + CRS 入库")
         member_results = process_accounts(invited_accounts, team_name)
         results.extend(member_results)
 
@@ -265,7 +276,7 @@ def process_accounts(accounts: list, team_name: str) -> list:
     """处理账号列表 (注册/授权/CRS)
 
     Args:
-        accounts: 账号列表 [{"email", "password", "status", "role"}]
+        accounts: 账号列表 [{"email", "password", "invitation_status", "role"}]
         team_name: Team 名称
 
     Returns:
@@ -274,6 +285,36 @@ def process_accounts(accounts: list, team_name: str) -> list:
     global _tracker, _current_results, _shutdown_requested
 
     results = []
+
+    team = _get_team_by_name(team_name)
+    if team and is_token_expired(team.get("token_expires_at")):
+        log.warning(f"Team {team_name} Token 已过期或即将过期，尝试刷新...", icon="auth")
+        refresh_token = team.get("refresh_token")
+        if refresh_token:
+            refreshed = refresh_access_token(refresh_token)
+            if refreshed:
+                access_token = refreshed.get("access_token")
+                refresh_token = refreshed.get("refresh_token")
+                token_expires_at = refreshed.get("token_expires_at")
+
+                if access_token:
+                    team["access_token"] = access_token
+                    team["auth_token"] = access_token
+                    team["needs_login"] = False
+                    team["authorized"] = True
+                if refresh_token:
+                    team["refresh_token"] = refresh_token
+                if token_expires_at:
+                    team["token_expires_at"] = token_expires_at
+
+                if save_team_json():
+                    log.success(f"Team {team_name} Token 刷新成功并已保存")
+                else:
+                    log.error(f"Team {team_name} Token 刷新成功但保存失败")
+            else:
+                log.error(f"Team {team_name} Token 刷新失败，继续使用旧 Token")
+        else:
+            log.warning(f"Team {team_name} 缺少 refresh_token，无法刷新 Token")
 
     for i, account in enumerate(accounts):
         if _shutdown_requested:
@@ -332,7 +373,7 @@ def process_accounts(accounts: list, team_name: str) -> list:
         }
 
         # 检查账号状态，决定处理流程
-        account_status = account.get("status", "")
+        account_status = _get_invitation_status(account, "")
         account_role = account.get("role", "member")
 
         # 已完成的账号跳过
@@ -428,22 +469,69 @@ def process_accounts(accounts: list, team_name: str) -> list:
                     continue  # 跳过当前账号，继续下一个
 
             if register_success and register_success != "domain_blacklisted":
-                update_account_status(_tracker, team_name, email, "registered")
-                save_team_tracker(_tracker)
+                if account_status not in ["authorized", "partial", "completed"]:
+                    update_account_status(_tracker, team_name, email, "registered")
+                    save_team_tracker(_tracker)
 
                 if AUTH_PROVIDER == "cpa":
                     update_account_status(_tracker, team_name, email, "authorized")
                     save_team_tracker(_tracker)
 
-                    result["status"] = "success"
-                    result["crs_id"] = "CPA-AUTO"
+                    storage_check = check_account_stored(email, "cpa")
+                    if storage_check.get("exists"):
+                        update_storage_status(
+                            _tracker, team_name, email, "cpa", storage_check
+                        )
+                        save_team_tracker(_tracker)
 
-                    update_account_status(_tracker, team_name, email, "completed")
-                    save_team_tracker(_tracker)
+                        result["status"] = "success"
+                        result["crs_id"] = "CPA-AUTO"
 
-                    log.success(f"CPA 账号处理完成: {email}")
+                        update_account_status(_tracker, team_name, email, "completed")
+                        save_team_tracker(_tracker)
+
+                        log.success(f"CPA 账号已入库，跳过: {email}")
+                    else:
+                        result["status"] = "success"
+                        result["crs_id"] = "CPA-AUTO"
+
+                        update_account_status(_tracker, team_name, email, "completed")
+                        save_team_tracker(_tracker)
+
+                        update_storage_status(
+                            _tracker,
+                            team_name,
+                            email,
+                            "cpa",
+                            {"status": "stored"},
+                        )
+                        save_team_tracker(_tracker)
+
+                        log.success(f"CPA 账号处理完成: {email}")
                 elif AUTH_PROVIDER == "s2a":
-                    if (
+                    storage_check = check_account_stored(email, "s2a")
+                    if storage_check.get("exists"):
+                        update_storage_status(
+                            _tracker, team_name, email, "s2a", storage_check
+                        )
+                        save_team_tracker(_tracker)
+
+                        result["status"] = "success"
+                        stored_id = storage_check.get("account_id")
+                        if stored_id:
+                            result["crs_id"] = f"S2A-{stored_id}"
+
+                        if account_status not in ["authorized", "completed"]:
+                            update_account_status(
+                                _tracker, team_name, email, "authorized"
+                            )
+                            save_team_tracker(_tracker)
+
+                        update_account_status(_tracker, team_name, email, "completed")
+                        save_team_tracker(_tracker)
+
+                        log.success(f"S2A 账号已入库，跳过: {email}")
+                    elif (
                         codex_data
                         and "code" in codex_data
                         and "session_id" in codex_data
@@ -474,6 +562,15 @@ def process_accounts(accounts: list, team_name: str) -> list:
                             )
                             save_team_tracker(_tracker)
 
+                            update_storage_status(
+                                _tracker,
+                                team_name,
+                                email,
+                                "s2a",
+                                {"status": "stored", "account_id": s2a_id},
+                            )
+                            save_team_tracker(_tracker)
+
                             log.success(f"S2A 账号处理完成: {email}")
                         else:
                             log.warning("S2A 入库失败，但注册和授权成功")
@@ -487,7 +584,29 @@ def process_accounts(accounts: list, team_name: str) -> list:
                         save_team_tracker(_tracker)
                 else:
                     # CRS 模式: 原有逻辑
-                    if codex_data:
+                    storage_check = check_account_stored(email, "crs")
+                    if storage_check.get("exists"):
+                        update_storage_status(
+                            _tracker, team_name, email, "crs", storage_check
+                        )
+                        save_team_tracker(_tracker)
+
+                        result["status"] = "success"
+                        stored_id = storage_check.get("account_id")
+                        if stored_id:
+                            result["crs_id"] = stored_id
+
+                        if account_status not in ["authorized", "completed"]:
+                            update_account_status(
+                                _tracker, team_name, email, "authorized"
+                            )
+                            save_team_tracker(_tracker)
+
+                        update_account_status(_tracker, team_name, email, "completed")
+                        save_team_tracker(_tracker)
+
+                        log.success(f"账号已入库，跳过: {email}")
+                    elif codex_data:
                         update_account_status(_tracker, team_name, email, "authorized")
                         save_team_tracker(_tracker)
 
@@ -502,6 +621,15 @@ def process_accounts(accounts: list, team_name: str) -> list:
 
                             update_account_status(
                                 _tracker, team_name, email, "completed"
+                            )
+                            save_team_tracker(_tracker)
+
+                            update_storage_status(
+                                _tracker,
+                                team_name,
+                                email,
+                                "crs",
+                                {"status": "stored", "account_id": crs_id},
                             )
                             save_team_tracker(_tracker)
 
@@ -594,7 +722,9 @@ def run_all_teams():
                             "team_name": team["name"],
                             "email": owner["email"],
                             "password": owner.get("password", DEFAULT_PASSWORD),
-                            "status": owner.get("status", "team_owner"),
+                            "invitation_status": _get_invitation_status(
+                                owner, "team_owner"
+                            ),
                             "role": "owner",
                         }
                     )
@@ -664,7 +794,7 @@ def run_single_team(team_index: int = 0):
             owner_data = {
                 "email": owner["email"],
                 "password": owner.get("password", DEFAULT_PASSWORD),
-                "status": owner.get("status", "team_owner"),
+                "invitation_status": _get_invitation_status(owner, "team_owner"),
                 "role": "owner",
             }
             owner_results = process_accounts([owner_data], team["name"])
@@ -730,7 +860,7 @@ def show_status():
         status_count = {}
         for acc in accounts:
             total_accounts += 1
-            status = acc.get("status", "unknown")
+            status = _get_invitation_status(acc, "unknown")
             status_count[status] = status_count.get(status, 0) + 1
 
             if status == "completed":
@@ -790,13 +920,13 @@ def process_team_with_login(team: dict, team_index: int, total: int):
     save_team_json()
 
     if not result.get("token"):
-        log.error(f"登录失败，跳过此 Team")
+        log.error("登录失败，跳过此 Team")
         return []
 
     team["needs_login"] = False
 
     if result.get("authorized"):
-        log.success(f"Owner 登录并授权成功")
+        log.success("Owner 登录并授权成功")
         # 记录 Owner 授权成功的结果
         owner_result = {
             "email": team["owner_email"],
@@ -805,7 +935,7 @@ def process_team_with_login(team: dict, team_index: int, total: int):
             "role": "owner",
         }
     else:
-        log.warning(f"Owner 登录成功但授权失败，后续可重试")
+        log.warning("Owner 登录成功但授权失败，后续可重试")
 
     # 2. 添加 Owner 到 tracker (状态根据 authorized 决定)
     _tracker = load_team_tracker()
@@ -819,11 +949,11 @@ def process_team_with_login(team: dict, team_index: int, total: int):
     if pending_owners:
         for owner in pending_owners:
             # 只处理未授权的 Owner
-            if owner.get("status") != "authorized":
+            if _get_invitation_status(owner) != "authorized":
                 owner_data = {
                     "email": owner["email"],
                     "password": owner.get("password", DEFAULT_PASSWORD),
-                    "status": owner.get("status", "registered"),
+                    "invitation_status": _get_invitation_status(owner, "registered"),
                     "role": "owner",
                 }
                 owner_results = process_accounts([owner_data], team["name"])

@@ -275,6 +275,103 @@ def cpa_poll_auth_status(state: str) -> bool:
     return False
 
 
+def cpa_query_account(email: str) -> dict:
+    """查询 CPA 入库状态
+
+    Args:
+        email: 账号邮箱
+
+    Returns:
+        {
+            "exists": bool,
+            "account_id": str | None,
+            "account_data": dict | None
+        }
+    """
+    headers = build_cpa_headers()
+    target_email = (email or "").lower()
+
+    if not target_email:
+        return {"exists": False, "account_id": None, "account_data": None}
+
+    endpoints = [
+        "/v0/management/accounts",
+        "/v0/management/account-list",
+    ]
+
+    max_retries = 3
+
+    for endpoint in endpoints:
+        response = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = http_session.get(
+                    f"{CPA_API_BASE}{endpoint}",
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt < max_retries:
+                    delay = 2**attempt
+                    log.warning(
+                        f"CPA 账号列表查询异常: {e}，{delay}s 后重试 "
+                        f"({attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                log.error(f"CPA 账号列表查询失败，重试耗尽: {e}")
+            except Exception as e:
+                log.warning(f"CPA 账号列表查询异常: {e}")
+            break
+
+        if response is None:
+            continue
+
+        if response.status_code == 404:
+            continue
+
+        if response.status_code != 200:
+            log.warning(
+                f"CPA 账号列表查询失败: HTTP {response.status_code} ({endpoint})"
+            )
+            continue
+
+        try:
+            result = response.json()
+        except Exception as e:
+            log.warning(f"CPA 账号列表解析失败: {e}")
+            continue
+
+        accounts = []
+        if isinstance(result, list):
+            accounts = result
+        elif isinstance(result, dict):
+            if isinstance(result.get("data"), list):
+                accounts = result.get("data", [])
+            elif isinstance(result.get("accounts"), list):
+                accounts = result.get("accounts", [])
+
+        for account in accounts:
+            account_email = (
+                account.get("email")
+                or account.get("name")
+                or account.get("account_email")
+                or ""
+            ).lower()
+            if account_email == target_email:
+                return {
+                    "exists": True,
+                    "account_id": account.get("id") or account.get("account_id"),
+                    "account_data": account,
+                }
+
+        return {"exists": False, "account_id": None, "account_data": None}
+
+    # TODO: CPA 未提供账号列表接口时，需要补充查询实现或调整接口路径。
+    return {"exists": False, "account_id": None, "account_data": None}
+
+
 def extract_callback_info(url: str) -> dict:
     """从回调 URL 中提取信息
 

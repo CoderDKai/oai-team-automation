@@ -138,26 +138,41 @@ def _parse_team_config(t: dict, index: int) -> dict:
         "account": "xxx@xxx.com",  # 邮箱
         "password": "...",         # 密码
         "token": "...",            # accessToken (格式3无此字段)
+        "access_token": "...",     # 新字段: 访问令牌
+        "refresh_token": "...",    # 新字段: 刷新令牌
+        "token_expires_at": 123,   # 新字段: 过期时间戳
         "authorized": true         # 是否已授权 (格式3授权后添加)
     }
+
+    字段映射 (向后兼容):
+        token → access_token
+        accessToken → access_token
     """
     # 检测格式类型
     if isinstance(t.get("account"), str):
         # 新格式: account 是邮箱字符串
         email = t.get("account", "")
         name = email.split("@")[0] if "@" in email else f"Team{index + 1}"
-        token = t.get("token", "")
         authorized = t.get("authorized", False)
         cached_account_id = t.get("account_id", "")
+
+        # Token 字段映射 (向后兼容)
+        # 优先级: access_token > token
+        access_token = t.get("access_token") or t.get("token", "")
+        refresh_token = t.get("refresh_token", "")
+        token_expires_at = t.get("token_expires_at")
 
         return {
             "name": name,
             "account_id": cached_account_id,
             "org_id": "",
-            "auth_token": token,
+            "auth_token": access_token,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_expires_at": token_expires_at,
             "owner_email": email,
             "owner_password": t.get("password", ""),
-            "needs_login": not token,
+            "needs_login": not access_token,
             "authorized": authorized,
             "can_receive_verification_code": t.get(
                 "can_receive_verification_code", True
@@ -169,11 +184,20 @@ def _parse_team_config(t: dict, index: int) -> dict:
         # 旧格式: account 是对象
         email = t.get("user", {}).get("email", f"Team{index + 1}")
         name = email.split("@")[0] if "@" in email else f"Team{index + 1}"
+
+        # Token 字段映射 (向后兼容)
+        access_token = t.get("accessToken", "")
+        refresh_token = t.get("refreshToken", "")
+        token_expires_at = t.get("tokenExpiresAt")
+
         return {
             "name": name,
             "account_id": t.get("account", {}).get("id", ""),
             "org_id": t.get("account", {}).get("organizationId", ""),
-            "auth_token": t.get("accessToken", ""),
+            "auth_token": access_token,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_expires_at": token_expires_at,
             "owner_email": email,
             "owner_password": "",
             "format": "old",
@@ -228,9 +252,22 @@ def save_team_json():
             if team.get("account_id") and raw.get("account_id") != team["account_id"]:
                 raw["account_id"] = team["account_id"]
                 updated = True
-            # 保存 token
-            if team.get("auth_token") and raw.get("token") != team["auth_token"]:
-                raw["token"] = team["auth_token"]
+            # 保存 access_token (使用新字段名)
+            if team.get("access_token"):
+                if raw.get("access_token") != team["access_token"]:
+                    raw["access_token"] = team["access_token"]
+                    updated = True
+                # 同时更新旧字段 token 以保持兼容
+                if raw.get("token") != team["access_token"]:
+                    raw["token"] = team["access_token"]
+                    updated = True
+            # 保存 refresh_token
+            if team.get("refresh_token") and raw.get("refresh_token") != team["refresh_token"]:
+                raw["refresh_token"] = team["refresh_token"]
+                updated = True
+            # 保存 token_expires_at
+            if team.get("token_expires_at") and raw.get("token_expires_at") != team["token_expires_at"]:
+                raw["token_expires_at"] = team["token_expires_at"]
                 updated = True
             # 保存 authorized 状态
             if team.get("authorized") and not raw.get("authorized"):
