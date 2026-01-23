@@ -1223,6 +1223,15 @@ def register_openai_account(page, email: str, password: str) -> bool:
         # 记录当前页面 (应该是 about-you 个人信息页面)
         log_current_url(page, "验证码通过后-个人信息页面")
 
+        # 检查是否已经登录 (账号已注册的情况)
+        # 如果验证码通过后直接进入主页且已登录，说明账号已存在
+        current_url = page.url or ""
+        if "chatgpt.com" in current_url and "/auth" not in current_url:
+            # 可能已经在主页，检查登录状态
+            if is_logged_in(page, timeout=3):
+                log.success(f"账号已注册并登录: {email}")
+                return True
+
         # 输入姓名 (随机外国名字)
         random_name = get_random_name()
         log.step(f"输入姓名: {random_name}")
@@ -3136,3 +3145,361 @@ def login_and_authorize_team_owner(
                     return {"success": False}
 
     return {"success": False}
+
+
+# ==================== 订阅 ChatGPT Team ====================
+# 美国州缩写映射表
+US_STATE_MAPPING = {
+    "AL": "Alabama", "AK": "Alaska", "AS": "American Samoa",
+    "AZ": "Arizona", "AR": "Arkansas", "AA": "Armed Forces (AA)",
+    "AE": "Armed Forces (AE)", "AP": "Armed Forces (AP)",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut",
+    "DE": "Delaware", "DC": "District of Columbia", "FL": "Florida",
+    "GA": "Georgia", "GU": "Guam", "HI": "Hawaii", "ID": "Idaho",
+    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine",
+    "MH": "Marshall Islands", "MD": "Maryland", "MA": "Massachusetts",
+    "MI": "Michigan", "FM": "Micronesia", "MN": "Minnesota",
+    "MS": "Mississippi", "MO": "Missouri", "MT": "Montana",
+    "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire",
+    "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota",
+    "MP": "Northern Mariana Islands", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PW": "Palau", "PA": "Pennsylvania",
+    "PR": "Puerto Rico", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas",
+    "UT": "Utah", "VT": "Vermont", "VI": "Virgin Islands",
+    "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming",
+}
+
+
+def _parse_address(address: str) -> dict:
+    """解析地址字符串
+
+    地址格式示例: "8280 Mayfern Drive, Fairburn, GA 30213, US"
+    """
+    parts = [p.strip() for p in address.split(",")]
+    result = {"line1": "", "city": "", "state": "", "zip": "", "country": "US"}
+
+    if len(parts) >= 1:
+        result["line1"] = parts[0]
+    if len(parts) >= 2:
+        result["city"] = parts[1]
+    if len(parts) >= 3:
+        state_zip = parts[2].strip().split()
+        if len(state_zip) >= 1:
+            result["state"] = state_zip[0]
+        if len(state_zip) >= 2:
+            result["zip"] = state_zip[1]
+    if len(parts) >= 4:
+        result["country"] = parts[3]
+
+    return result
+
+
+def subscribe_chatgpt_team(page, email: str, card_info: dict) -> bool:
+    """订阅 ChatGPT Team
+
+    Args:
+        page: 浏览器实例
+        email: 邮箱地址
+        card_info: 信用卡信息，包含:
+            - card_number: 卡号
+            - expiry: 过期时间 (MM/YY)
+            - cvc: CVC
+            - name: 持卡人姓名
+            - address: 地址字符串
+
+    Returns:
+        bool: 是否成功
+    """
+    log.info(f"开始订阅 ChatGPT Team: {email}", icon="payment")
+
+    try:
+        # 步骤1: 进入 pricing 页面
+        log.step("进入 pricing 页面...")
+        page.get("https://chatgpt.com/#pricing")
+        wait_for_page_stable(page, timeout=10)
+        log_current_url(page, "pricing 页面", force=True)
+        human_delay(1.0, 2.0)
+
+        # 步骤2: 点击 Teams 订阅按钮
+        log.step("点击 Teams 订阅按钮...")
+        teams_btn = wait_for_element(
+            page, 'css:button[data-testid="select-plan-button-teams-create"]', timeout=15
+        )
+        if not teams_btn:
+            log.error("未找到 Teams 订阅按钮")
+            return False
+
+        old_url = page.url
+        teams_btn.click()
+        time.sleep(3)
+        wait_for_page_stable(page, timeout=10)
+        log_url_change(page, old_url, "点击 Teams 按钮后")
+
+        # 步骤3: 填写支付信息
+        log.step("填写支付信息...")
+        return _fill_payment_form(page, email, card_info)
+
+    except Exception as e:
+        log.error(f"订阅失败: {e}")
+        return False
+
+
+def _fill_payment_form(page, email: str, card_info: dict) -> bool:
+    """填写支付表单
+
+    Args:
+        page: 浏览器实例
+        email: 邮箱地址
+        card_info: 信用卡信息
+
+    Returns:
+        bool: 是否成功
+    """
+    try:
+        # 解析地址
+        address = card_info.get("address", "")
+        parsed_addr = _parse_address(address)
+
+        # 获取持卡人姓名（使用 card_info 中的 name，或从邮箱提取）
+        cardholder_name = card_info.get("name", "")
+        if not cardholder_name:
+            cardholder_name = email.split("@")[0]
+
+        # 填写邮箱
+        log.step("填写邮箱...")
+        email_input = wait_for_element(page, 'css:input[type="email"]', timeout=15)
+        if email_input:
+            type_slowly(page, 'css:input[type="email"]', email)
+            human_delay(0.5, 1.0)
+
+        # 填写卡号
+        log.step("填写卡号...")
+        card_input = wait_for_element(page, 'css:input[name="number"]', timeout=10)
+        if card_input:
+            card_number = card_info.get("card_number", "")
+            type_slowly(page, 'css:input[name="number"]', card_number)
+            human_delay(0.3, 0.6)
+
+        # 填写过期时间
+        log.step("填写过期时间...")
+        expiry_input = wait_for_element(page, 'css:input[name="expiry"]', timeout=5)
+        if expiry_input:
+            expiry = card_info.get("expiry", "")
+            type_slowly(page, 'css:input[name="expiry"]', expiry)
+            human_delay(0.3, 0.6)
+
+        # 填写 CVC
+        log.step("填写 CVC...")
+        cvc_input = wait_for_element(page, 'css:input[name="cvc"]', timeout=5)
+        if cvc_input:
+            cvc = card_info.get("cvc", "")
+            type_slowly(page, 'css:input[name="cvc"]', cvc)
+            human_delay(0.3, 0.6)
+
+        # 填写持卡人姓名
+        log.step("填写持卡人姓名...")
+        name_input = wait_for_element(page, 'css:input[name="name"]', timeout=5)
+        if name_input:
+            type_slowly(page, 'css:input[name="name"]', cardholder_name)
+            human_delay(0.3, 0.6)
+
+        # 填写地址
+        return _fill_address_fields(page, parsed_addr)
+
+    except Exception as e:
+        log.error(f"填写支付表单失败: {e}")
+        return False
+
+
+def _fill_address_fields(page, parsed_addr: dict) -> bool:
+    """填写地址字段并提交订阅
+
+    Args:
+        page: 浏览器实例
+        parsed_addr: 解析后的地址
+
+    Returns:
+        bool: 是否成功
+    """
+    try:
+        # 填写地址行1
+        log.step("填写地址...")
+        addr_input = wait_for_element(
+            page, 'css:input[name="addressLine1"]', timeout=5
+        )
+        if addr_input:
+            type_slowly(
+                page, 'css:input[name="addressLine1"]', parsed_addr["line1"]
+            )
+            human_delay(0.3, 0.6)
+
+        # 填写城市
+        log.step("填写城市...")
+        city_input = wait_for_element(
+            page, 'css:input[name="locality"]', timeout=5
+        )
+        if city_input:
+            type_slowly(page, 'css:input[name="locality"]', parsed_addr["city"])
+            human_delay(0.3, 0.6)
+
+        # 选择州
+        log.step("选择州...")
+        state_code = parsed_addr["state"].upper()
+        state_select = wait_for_element(
+            page, 'css:select[name="administrativeArea"]', timeout=5
+        )
+        if state_select:
+            state_select.select(state_code)
+            human_delay(0.3, 0.6)
+
+        # 点击订阅按钮
+        log.step("点击订阅按钮...")
+        human_delay(1.0, 2.0)
+        submit_btn = wait_for_element(
+            page, 'css:button[type="submit"]', timeout=10
+        )
+        if submit_btn:
+            old_url = page.url
+            submit_btn.click()
+            time.sleep(5)
+
+        # 处理支付成功后的流程
+        return _handle_post_payment(page)
+
+    except Exception as e:
+        log.error(f"填写地址失败: {e}")
+        return False
+
+
+def _handle_post_payment(page) -> bool:
+    """处理支付成功后的流程
+
+    包括：
+    1. 等待验证码（如果有）
+    2. 点击 Continue
+    3. 填写工作区名称
+
+    Returns:
+        bool: 是否成功
+    """
+    try:
+        # 等待页面加载
+        wait_for_page_stable(page, timeout=15)
+        log_current_url(page, "支付后页面", force=True)
+
+        # 检查是否有验证码
+        max_captcha_wait = 120  # 最多等待 2 分钟
+        captcha_detected = False
+
+        for _ in range(max_captcha_wait // 5):
+            current_url = page.url
+            # 检查是否在支付成功页面
+            if "payments/success" in current_url:
+                break
+
+            # 检查是否有验证码
+            captcha = page.ele("css:iframe[title*='captcha']", timeout=1)
+            if not captcha:
+                captcha = page.ele("css:iframe[title*='challenge']", timeout=1)
+
+            if captcha:
+                if not captcha_detected:
+                    captcha_detected = True
+                    log.warning("检测到验证码，请手动完成验证...")
+                    input("   按 Enter 键继续...")
+                break
+
+            time.sleep(5)
+
+        # 等待支付成功页面
+        return _handle_success_page(page)
+
+    except Exception as e:
+        log.error(f"支付后处理失败: {e}")
+        return False
+
+
+def _handle_success_page(page) -> bool:
+    """处理支付成功页面
+
+    Returns:
+        bool: 是否成功
+    """
+    try:
+        # 等待支付成功页面
+        log.step("等待支付成功页面...")
+        for _ in range(30):
+            if "payments/success" in page.url:
+                break
+            time.sleep(2)
+
+        log_current_url(page, "支付成功页面", force=True)
+
+        # 点击 Continue 按钮
+        log.step("点击 Continue 按钮...")
+        continue_btn = wait_for_element(
+            page, 'css:button.btn-primary', timeout=15
+        )
+        if not continue_btn:
+            continue_btn = page.ele("text:Continue", timeout=5)
+
+        if continue_btn:
+            continue_btn.click()
+            time.sleep(3)
+            wait_for_page_stable(page, timeout=10)
+
+        # 填写工作区名称
+        return _fill_workspace_name(page)
+
+    except Exception as e:
+        log.error(f"处理成功页面失败: {e}")
+        return False
+
+
+def _fill_workspace_name(page) -> bool:
+    """填写工作区名称
+
+    Returns:
+        bool: 是否成功
+    """
+    try:
+        log_current_url(page, "工作区命名页面", force=True)
+
+        # 等待工作区名称输入框
+        log.step("填写工作区名称...")
+        workspace_input = wait_for_element(
+            page, 'css:input[name="workspace-name"]', timeout=15
+        )
+
+        if workspace_input:
+            # 清空现有内容
+            workspace_input.clear()
+            time.sleep(0.3)
+            # 输入 "Codex"
+            type_slowly(page, 'css:input[name="workspace-name"]', "Codex")
+            human_delay(0.5, 1.0)
+
+        # 点击 Continue 按钮
+        log.step("点击 Continue 完成创建...")
+        continue_btn = wait_for_element(
+            page, 'css:button.btn-primary', timeout=10
+        )
+        if not continue_btn:
+            continue_btn = page.ele("text:Continue", timeout=5)
+
+        if continue_btn:
+            continue_btn.click()
+            time.sleep(3)
+            wait_for_page_stable(page, timeout=10)
+
+        log.success("工作区创建完成")
+        log_current_url(page, "创建完成", force=True)
+        return True
+
+    except Exception as e:
+        log.error(f"填写工作区名称失败: {e}")
+        return False

@@ -1,0 +1,15 @@
+[
+  {
+    "_comment": "创建 Team 父账号示例配置",
+    "_comment2": "card_info 中的 name 和 address 会用于支付表单",
+    "email": "team-owner@example.com",
+    "password": "YourPassword@2025",
+    "card_info": {
+      "card_number": "4242424242424242",
+      "expiry": "12/28",
+      "cvc": "123",
+      "name": "John Smith",
+      "address": "8280 Mayfern Drive, Fairburn, GA 30213, US"
+    }
+  }
+]

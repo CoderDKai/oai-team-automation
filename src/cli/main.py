@@ -1,6 +1,7 @@
 import argparse
 import sys
 
+from src.cli.commands import create_parent_account as create_parent_account_cmd
 from src.cli.commands import migrate as migrate_cmd
 from src.cli.commands import register as register_cmd
 from src.cli.commands import start as start_cmd
@@ -17,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_cmd.add_parser(subparsers)
     migrate_cmd.add_parser(subparsers)
     register_cmd.add_parser(subparsers)
+    create_parent_account_cmd.add_parser(subparsers)
 
     return parser
 
