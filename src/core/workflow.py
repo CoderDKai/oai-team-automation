@@ -940,6 +940,15 @@ def process_team_with_login(team: dict, team_index: int, total: int):
     # 2. 添加 Owner 到 tracker (状态根据 authorized 决定)
     _tracker = load_team_tracker()
     add_team_owners_to_tracker(_tracker, DEFAULT_PASSWORD)
+    storage_check = result.get("storage_check")
+    if storage_check:
+        update_storage_status(
+            _tracker,
+            team["name"],
+            team["owner_email"],
+            AUTH_PROVIDER,
+            storage_check,
+        )
     save_team_tracker(_tracker)
 
     # 3. 处理该 Team 的成员
