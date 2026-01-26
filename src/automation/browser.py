@@ -2860,6 +2860,34 @@ def login_and_get_session(
                     log.error("无法找到验证码输入框")
                     return None
 
+            # 步骤3: 处理工作区选择页面 (auth.openai.com/workspace)
+            if "auth.openai.com/workspace" in current_url:
+                log_current_url(page, "工作区选择页面")
+                log.info("检测到工作区选择页面，尝试选择第一个工作区...")
+
+                # 查找工作区选择按钮
+                workspace_buttons = page.eles('css:button[name="workspace_id"]', timeout=5)
+                if workspace_buttons and len(workspace_buttons) > 0:
+                    first_button = workspace_buttons[0]
+                    button_text = first_button.text if first_button.text else "Unknown"
+                    log.step(f"选择工作区: {button_text}")
+
+                    old_url = page.url
+                    first_button.click()
+                    time.sleep(2)
+
+                    # 等待页面跳转
+                    if wait_for_url_change(page, old_url, timeout=10):
+                        log.success("工作区选择成功")
+                        continue
+                    else:
+                        log.warning("工作区选择后页面未跳转")
+                        continue
+                else:
+                    log.warning("未找到工作区选择按钮，尝试继续...")
+                    time.sleep(1)
+                    continue
+
             # 处理错误
             if check_and_handle_error(page):
                 time.sleep(0.5)
@@ -2915,8 +2943,11 @@ def _check_and_select_team_workspace_dialog(page) -> bool:
         log.info("检测到团队工作空间选择弹框")
 
         # 查找工作空间选项按钮
-        # 优先使用 class 选择器: button.group.__menu-item (同时具有 group 和 __menu-item 类)
-        menu_buttons = dialog.eles('css:button.group.__menu-item')
+        # 优先使用 name 选择器: button[name="workspace_id"]
+        menu_buttons = dialog.eles('css:button[name="workspace_id"]')
+        if not menu_buttons:
+            # 备选: 使用 class 选择器: button.group.__menu-item
+            menu_buttons = dialog.eles('css:button.group.__menu-item')
         if not menu_buttons:
             # 备选: 使用 role="radio" 选择器
             menu_buttons = dialog.eles('css:button[role="radio"]')
@@ -3037,12 +3068,8 @@ def _fetch_session_data(page) -> dict:
     try:
         import json as json_module
 
-        page.get("https://chatgpt.com")
-        time.sleep(1)
-
-        _check_and_select_team_workspace_dialog(page)
-        time.sleep(1)
-
+        # 不需要重新访问 chatgpt.com 和切换工作区
+        # 登录流程已经选择了正确的工作区
         log.step("获取 Session 数据...")
         page.get("https://chatgpt.com/api/auth/session")
         time.sleep(1)
@@ -3071,45 +3098,10 @@ def _fetch_session_data(page) -> dict:
             else:
                 log.warning("  account_id: 未获取到")
 
-            expires_at = 0
-            try:
-                log.step("获取 Team 订阅信息...")
-                page.get("https://chatgpt.com/backend-api/me")
-                time.sleep(1)
-
-                me_body = page.ele("tag:body", timeout=5)
-                if me_body:
-                    me_text = me_body.text
-                    if me_text and me_text != "{}":
-                        me_data = json_module.loads(me_text)
-                        accounts = me_data.get("accounts", {})
-
-                        if account_id and account_id in accounts:
-                            account_info = accounts[account_id]
-                            entitlement = account_info.get("entitlement", {})
-                            expires_at_str = entitlement.get("expires_at")
-
-                            if expires_at_str:
-                                from datetime import datetime
-
-                                expires_dt = datetime.fromisoformat(
-                                    expires_at_str.replace("Z", "+00:00")
-                                )
-                                expires_at = int(expires_dt.timestamp())
-                                log.success(
-                                    f"  expires_at: {expires_at} ({expires_at_str})"
-                                )
-                            else:
-                                log.warning("  expires_at: 未获取到")
-                        else:
-                            log.warning("  未找到当前账号的订阅信息")
-            except Exception as e:
-                log.warning(f"获取 Team 订阅信息失败: {e}")
-
             return {
                 "token": token,
                 "account_id": account_id or "",
-                "expires_at": expires_at,
+                "expires_at": 0,
             }
         else:
             log.error("Session 中没有 token")
