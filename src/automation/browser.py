@@ -1220,17 +1220,59 @@ def register_openai_account(page, email: str, password: str) -> bool:
             while check_and_handle_error(page):
                 time.sleep(0.5)
 
-        # 记录当前页面 (应该是 about-you 个人信息页面)
-        log_current_url(page, "验证码通过后-个人信息页面")
+        # 记录当前页面
+        log_current_url(page, "验证码通过后")
+
+        # 检查当前页面状态
+        current_url = page.url
+
+        # 情况1: 如果已经在 ChatGPT 主页，说明注册已完成
+        if "chatgpt.com" in current_url and "auth.openai.com" not in current_url:
+            try:
+                if is_logged_in(page):
+                    log.success("检测到已登录，注册已完成")
+                    return True
+            except Exception:
+                pass
+
+        # 情况2: 检查是否在个人信息填写页面
+        # 先检查 URL 是否包含 about-you
+        if "auth.openai.com/about-you" not in current_url:
+            # 如果 URL 不包含 about-you，检查是否有姓名输入框
+            name_input_check = page.ele('css:input[name="name"]', timeout=2)
+            if not name_input_check:
+                name_input_check = page.ele('css:input[autocomplete="name"]', timeout=1)
+
+            if not name_input_check:
+                # 既不在 about-you 页面，也没有姓名输入框
+                # 可能注册已完成或页面状态异常
+                log.warning("未检测到个人信息填写页面，可能注册已完成")
+                # 再次检查是否已登录
+                try:
+                    if is_logged_in(page):
+                        log.success("确认已登录，注册已完成")
+                        return True
+                except Exception:
+                    pass
+                log.error("页面状态异常，无法继续")
+                return False
+
+        # 情况3: 在个人信息填写页面，继续输入姓名和生日
+        log.info("检测到个人信息填写页面，继续输入姓名和生日")
 
         # 输入姓名 (随机外国名字)
         random_name = get_random_name()
         log.step(f"输入姓名: {random_name}")
-        name_input = wait_for_element(page, 'css:input[name="name"]', timeout=15)
+        name_input = wait_for_element(page, 'css:input[name="name"]', timeout=10)
         if not name_input:
             name_input = wait_for_element(
                 page, 'css:input[autocomplete="name"]', timeout=5
             )
+
+        if not name_input:
+            log.error("未找到姓名输入框")
+            return False
+
         type_slowly(
             page, 'css:input[name="name"], input[autocomplete="name"]', random_name
         )
@@ -2856,7 +2898,9 @@ def _check_and_select_team_workspace_dialog(page) -> bool:
 def _check_and_select_workspace(page) -> bool:
     """检查并选择工作空间
 
-    如果出现"启动工作空间"页面，点击第一个"打开"按钮
+    支持两种页面结构：
+    1. 新版：form[action="/workspace"] 表单页面
+    2. 旧版：带"启动工作空间"文字的页面
 
     Returns:
         bool: 是否处理了工作空间选择
@@ -2866,35 +2910,76 @@ def _check_and_select_workspace(page) -> bool:
         if _check_and_select_team_workspace_dialog(page):
             time.sleep(2)  # 等待弹框关闭
 
-        # 检查是否有"启动工作空间"文字
+        # 方式1: 检查新版工作空间选择页面 (form[action="/workspace"])
+        workspace_form = page.ele('css:form[action="/workspace"]', timeout=2)
+        if workspace_form:
+            log.info("检测到工作空间选择页面 (新版)")
+
+            # 查找所有工作空间按钮
+            workspace_buttons = page.eles('css:button[name="workspace_id"]')
+            if workspace_buttons:
+                # 优先选择非"个人账户"的按钮（即团队工作空间）
+                team_button = None
+                for btn in workspace_buttons:
+                    btn_text = btn.text.lower()
+                    # 跳过"个人账户"选项
+                    if "个人账户" not in btn_text and "personal" not in btn_text:
+                        team_button = btn
+                        break
+
+                # 如果找到团队工作空间，点击它
+                if team_button:
+                    workspace_name = team_button.text.split("\n")[0] if team_button.text else "Unknown"
+                    log.step(f"选择团队工作空间: {workspace_name}")
+                    old_url = page.url
+                    team_button.click()
+                    wait_for_url_change(page, old_url, timeout=10)
+                    log.success("已选择团队工作空间")
+                    return True
+                else:
+                    # 如果没有团队工作空间，选择第一个按钮
+                    log.warning("未找到团队工作空间，选择第一个可用选项")
+                    first_btn = workspace_buttons[0]
+                    workspace_name = first_btn.text.split("\n")[0] if first_btn.text else "Unknown"
+                    log.step(f"选择工作空间: {workspace_name}")
+                    old_url = page.url
+                    first_btn.click()
+                    wait_for_url_change(page, old_url, timeout=10)
+                    return True
+            else:
+                log.warning("未找到工作空间按钮")
+                return False
+
+        # 方式2: 检查旧版工作空间选择页面（带"启动工作空间"文字）
         workspace_text = page.ele("text:启动工作空间", timeout=2)
         if not workspace_text:
             workspace_text = page.ele("text:Launch workspace", timeout=1)
 
-        if not workspace_text:
+        if workspace_text:
+            log.info("检测到工作空间选择页面 (旧版)")
+
+            # 直接点击第一个"打开"按钮
+            open_btn = page.ele("text:打开", timeout=2)
+            if not open_btn:
+                open_btn = page.ele("text:Open", timeout=1)
+
+            if open_btn:
+                log.step("选择第一个工作空间...")
+                open_btn.click()
+
+                # 等待页面加载完成
+                wait_for_page_stable(page, timeout=10)
+
+                # 检查是否进入了职业选择页面（说明工作空间选择成功）
+                if _is_job_selection_page(page):
+                    log.success("已进入工作空间")
+
+                return True
+
+            log.warning("未找到打开按钮")
             return False
 
-        log.info("检测到工作空间选择页面")
-
-        # 直接点击第一个"打开"按钮
-        open_btn = page.ele("text:打开", timeout=2)
-        if not open_btn:
-            open_btn = page.ele("text:Open", timeout=1)
-
-        if open_btn:
-            log.step("选择第一个工作空间...")
-            open_btn.click()
-
-            # 等待页面加载完成
-            wait_for_page_stable(page, timeout=10)
-
-            # 检查是否进入了职业选择页面（说明工作空间选择成功）
-            if _is_job_selection_page(page):
-                log.success("已进入工作空间")
-
-            return True
-
-        log.warning("未找到打开按钮")
+        # 两种方式都未检测到工作空间选择页面
         return False
 
     except Exception as e:

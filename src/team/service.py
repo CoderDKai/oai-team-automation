@@ -386,6 +386,31 @@ def get_team_stats(team: dict) -> dict:
     return {}
 
 
+def get_team_members(team: dict) -> list:
+    """获取 Team 的成员列表（包括已激活的成员）
+
+    Args:
+        team: Team 配置
+
+    Returns:
+        list: 成员列表，每个成员包含 email、role、status 等信息
+    """
+    headers = build_invite_headers(team)
+    url = f"https://chatgpt.com/backend-api/accounts/{team['account_id']}/members?offset=0&limit=100"
+
+    try:
+        response = http_session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("items", [])
+
+    except Exception as e:
+        log.warning(f"获取团队成员列表异常: {e}")
+
+    return []
+
+
 def get_pending_invites(team: dict) -> list:
     """获取 Team 的待处理邀请列表
 

@@ -34,6 +34,8 @@ from src.team.service import (
     check_available_seats,
     invite_single_to_team,
     preload_all_account_ids,
+    get_team_members,
+    get_pending_invites,
 )
 from src.auth.crs.client import crs_add_account, crs_verify_token
 from src.auth.cpa.client import cpa_verify_connection
@@ -168,6 +170,27 @@ def process_single_team(team: dict) -> tuple[list, list]:
     available_seats = check_available_seats(team)
     log.info(f"Team 可用席位: {available_seats}")
 
+    # ========== 从 API 获取实际成员数量（包括非脚本创建的）==========
+    api_members = get_team_members(team)
+    api_pending = get_pending_invites(team)
+
+    # 统计实际的普通成员数量（排除 Owner）
+    actual_active_members = [
+        m for m in api_members
+        if m.get("role", "").lower() not in ["owner", "workspace_owner"]
+    ]
+    actual_pending_members = [
+        p for p in api_pending
+        if p.get("role", "").lower() not in ["owner", "workspace_owner"]
+    ]
+    actual_member_count = len(actual_active_members) + len(actual_pending_members)
+
+    if actual_member_count != member_count:
+        log.info(
+            f"成员数量: Tracker 中 {member_count} 个, API 实际 {actual_member_count} 个 "
+            f"(已激活 {len(actual_active_members)}, 待处理 {len(actual_pending_members)})"
+        )
+
     # ========== 检查未完成的普通成员账号 ==========
     incomplete_members = [
         acc for acc in member_accounts if _get_invitation_status(acc) != "completed"
@@ -193,16 +216,16 @@ def process_single_team(team: dict) -> tuple[list, list]:
             for acc in incomplete_members
         ]
         log.info("继续处理未完成成员账号...", icon="start")
-    elif member_count >= ACCOUNTS_PER_TEAM:
-        # 普通成员已达到目标数量
-        log.success(f"已有 {member_count} 个成员账号，无需邀请新成员")
+    elif actual_member_count >= ACCOUNTS_PER_TEAM:
+        # 普通成员已达到目标数量（使用 API 实际数量）
+        log.success(f"已有 {actual_member_count} 个成员账号（含非脚本创建），无需邀请新成员")
     elif available_seats > 0:
-        # 需要邀请新成员
-        need_count = min(ACCOUNTS_PER_TEAM - member_count, available_seats)
+        # 需要邀请新成员（基于 API 实际数量计算）
+        need_count = min(ACCOUNTS_PER_TEAM - actual_member_count, available_seats)
 
         if need_count > 0:
             log.info(
-                f"已有 {member_count} 个成员账号，可用席位 {available_seats}，将创建 {need_count} 个"
+                f"已有 {actual_member_count} 个成员账号（含非脚本创建），可用席位 {available_seats}，将创建 {need_count} 个"
             )
 
             # ========== 阶段 1: 批量创建邮箱 ==========
@@ -966,7 +989,13 @@ def process_team_with_login(team: dict, team_index: int, total: int):
     return results
 
 
-def main(command: str | None = None, team_index: int | None = None):
+def main(command: str | None = None, team_index: int | None = None, headless: bool = False):
+    # ========== 动态设置浏览器模式 ==========
+    if headless:
+        import src.core.config as config
+        config.BROWSER_HEADLESS = True
+        log.info("已启用无头模式", icon="browser")
+
     # ========== 启动前置检查 ==========
     # 1. 根据配置选择验证对应的授权服务
     if AUTH_PROVIDER == "cpa":

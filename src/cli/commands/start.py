@@ -7,6 +7,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("start", help="启动主流程")
     parser.add_argument("--team-index", type=int, help="仅处理指定 Team 索引")
     parser.add_argument("--test-email-only", action="store_true", help="仅测试邮箱")
+    parser.add_argument("--headless", action="store_true", help="以无头模式运行浏览器")
     parser.set_defaults(func=start_command)
 
 
@@ -14,12 +15,12 @@ def start_command(args: argparse.Namespace) -> int:
     from src.core import workflow
 
     if args.test_email_only:
-        workflow.main("test")
+        workflow.main("test", headless=args.headless)
         return 0
 
     if args.team_index is not None:
-        workflow.main("single", args.team_index)
+        workflow.main("single", args.team_index, headless=args.headless)
         return 0
 
-    workflow.main()
+    workflow.main(headless=args.headless)
     return 0
