@@ -108,6 +108,7 @@ def _register_single_account(email: str, password: str) -> bool | str:
                 if attempt < ctx.max_retries - 1:
                     log.warning("注册失败，准备重试...")
                     continue
+                ctx.capture_failure("register_failed")
                 return False
             except Exception as exc:
                 ctx.handle_error(exc)

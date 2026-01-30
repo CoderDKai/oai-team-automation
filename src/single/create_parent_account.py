@@ -257,6 +257,7 @@ def _create_single_parent_account(
                     if attempt < ctx.max_retries - 1:
                         log.warning("注册失败，准备重试...")
                         continue
+                    ctx.capture_failure("register_failed")
                     return False
 
                 # 步骤2: 订阅 ChatGPT Team
@@ -268,6 +269,7 @@ def _create_single_parent_account(
                     if attempt < ctx.max_retries - 1:
                         log.warning("订阅失败，准备重试...")
                         continue
+                    ctx.capture_failure("subscribe_failed")
                     return False
 
                 return team_result
