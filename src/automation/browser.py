@@ -208,12 +208,34 @@ def _is_email_time_valid(
 
 
 def get_verification_code_with_time_guard(
-    email: str, entered_at: datetime | None
+    email: str,
+    entered_at: datetime | None,
+    max_time_retries: int = 3,
+    retry_wait: int = 10,
 ) -> tuple[str | None, str | None, str | None]:
-    code, error, email_time = unified_get_verification_code(email)
-    if code and entered_at and not _is_email_time_valid(email_time, entered_at):
-        return None, "验证码邮件时间超出有效窗口", email_time
-    return code, error, email_time
+    """获取验证码并校验时间窗口，超时则重试。"""
+    last_error = None
+    last_email_time = None
+
+    for attempt in range(1, max_time_retries + 1):
+        code, error, email_time = unified_get_verification_code(email)
+        last_error = error
+        last_email_time = email_time
+
+        if code and entered_at and not _is_email_time_valid(email_time, entered_at):
+            last_error = "验证码邮件时间超出有效窗口"
+            if attempt < max_time_retries:
+                log.info(
+                    f"等待 {retry_wait} 秒后重新获取验证码 ({attempt}/{max_time_retries})...",
+                    icon="wait",
+                )
+                time.sleep(retry_wait)
+                continue
+            return None, last_error, email_time
+
+        return code, error, email_time
+
+    return None, last_error or "未能获取验证码", last_email_time
 
 
 def log_url_change(page, old_url: str, action: str = None):

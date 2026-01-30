@@ -910,10 +910,12 @@ def process_team_with_login(team: dict, team_index: int, total: int):
 
     if result.get("token"):
         team["auth_token"] = result["token"]
+        team["access_token"] = result["token"]
     if result.get("account_id"):
         team["account_id"] = result["account_id"]
-    if result.get("expires_at"):
+    if result.get("expires_at") is not None:
         team["expires_at"] = result["expires_at"]
+        team["token_expires_at"] = result["expires_at"]
     if result.get("authorized"):
         team["authorized"] = True
 
