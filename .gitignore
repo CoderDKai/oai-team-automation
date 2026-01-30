@@ -5,6 +5,7 @@ venv/
 dist/
 *.egg-info/
 logs/
+logs
 
 .DS_Store
 Thumbs.db
