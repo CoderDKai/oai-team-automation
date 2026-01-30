@@ -5,7 +5,9 @@
 import time
 import random
 import subprocess
-import os
+import re
+import shutil
+from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
 from DrissionPage import ChromiumPage, ChromiumOptions
@@ -35,7 +37,7 @@ from src.auth.cpa.client import (
     is_cpa_callback_url,
 )
 from src.auth.s2a.client import s2a_generate_auth_url
-from src.core.logger import log
+from src.core.logger import LOG_DIR, LOG_FILE, log
 from src.core.storage_manager import check_account_stored
 
 
@@ -43,6 +45,10 @@ from src.core.storage_manager import check_account_stored
 BROWSER_MAX_RETRIES = 3  # 浏览器启动最大重试次数
 BROWSER_RETRY_DELAY = 2  # 重试间隔 (秒)
 PAGE_LOAD_TIMEOUT = 15  # 页面加载超时 (秒)
+
+# ==================== 失败输出配置 ====================
+FAILED_DIR = LOG_DIR / "falid"
+_ACTIVE_PAGE = None
 
 # ==================== 输入速度配置 (模拟真人) ====================
 # 设置为 True 使用更安全的慢速模式，False 使用快速模式
@@ -56,6 +62,94 @@ VERIFICATION_CODE_TIME_WINDOW_SECONDS = 120  # 进入验证码页后 2 分钟内
 
 # ==================== URL 监听与日志 ====================
 _last_logged_url = None  # 记录上次日志的URL，避免重复
+
+
+def _sanitize_screenshot_label(label: str | None) -> str:
+    if not label:
+        return ""
+    safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", label).strip("-")
+    return safe.lower()
+
+
+def _set_active_page(page) -> None:
+    global _ACTIVE_PAGE
+    _ACTIVE_PAGE = page
+
+
+def _clear_active_page(page) -> None:
+    global _ACTIVE_PAGE
+    if _ACTIVE_PAGE is page:
+        _ACTIVE_PAGE = None
+
+
+def capture_page_screenshot(page, reason: str | None = None) -> str | None:
+    """保存浏览器页面截图 (失败时用于排查问题)。"""
+    if not page:
+        return None
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    failure_dir = FAILED_DIR / timestamp
+    try:
+        failure_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        log.warning(f"创建失败目录失败: {exc}")
+        return None
+
+    label = _sanitize_screenshot_label(reason)
+    filename = "screenshot"
+    if label:
+        filename = f"{filename}_{label}"
+    filename = f"{filename}.png"
+    path = failure_dir / filename
+
+    screenshot_ok = False
+    try:
+        if hasattr(page, "get_screenshot"):
+            try:
+                page.get_screenshot(path=str(path))
+            except TypeError:
+                page.get_screenshot(str(path))
+            screenshot_ok = True
+        elif hasattr(page, "screenshot"):
+            try:
+                page.screenshot(path=str(path))
+            except TypeError:
+                page.screenshot(str(path))
+            screenshot_ok = True
+        else:
+            log.warning("当前浏览器对象不支持截图")
+    except Exception as exc:
+        log.warning(f"截图失败: {exc}")
+
+    _copy_execution_logs(failure_dir)
+    log.warning(f"失败信息已保存到: {failure_dir}")
+    return str(path) if screenshot_ok else None
+
+
+def capture_current_page_screenshot(reason: str | None = None) -> str | None:
+    return capture_page_screenshot(_ACTIVE_PAGE, reason=reason)
+
+
+def _copy_execution_logs(target_dir: Path) -> None:
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        log.warning(f"创建失败日志目录失败: {exc}")
+        return
+
+    if LOG_FILE.exists():
+        try:
+            shutil.copy2(LOG_FILE, target_dir / LOG_FILE.name)
+        except Exception as exc:
+            log.warning(f"复制日志文件失败: {exc}")
+
+    for log_path in LOG_DIR.glob(f"{LOG_FILE.name}.*"):
+        if not log_path.is_file():
+            continue
+        try:
+            shutil.copy2(log_path, target_dir / log_path.name)
+        except Exception as exc:
+            log.warning(f"复制日志文件失败: {exc}")
 
 
 def log_current_url(page, context: str = None, force: bool = False):
@@ -355,6 +449,7 @@ def init_browser(max_retries: int = BROWSER_MAX_RETRIES) -> ChromiumPage:
             co.set_timeouts(base=PAGE_LOAD_TIMEOUT, page_load=PAGE_LOAD_TIMEOUT * 2)
 
             page = ChromiumPage(co)
+            _set_active_page(page)
             log.success("浏览器启动成功")
             return page
 
@@ -390,6 +485,9 @@ def browser_context(max_retries: int = BROWSER_MAX_RETRIES):
     try:
         page = init_browser(max_retries)
         yield page
+    except Exception:
+        capture_page_screenshot(page, reason="exception")
+        raise
     finally:
         if page:
             log.step("关闭浏览器...")
@@ -398,6 +496,7 @@ def browser_context(max_retries: int = BROWSER_MAX_RETRIES):
             except Exception as e:
                 log.warning(f"浏览器关闭异常: {e}")
             finally:
+                _clear_active_page(page)
                 # 确保清理残留进程
                 cleanup_chrome_processes()
 
@@ -439,6 +538,7 @@ class BrowserRetryContext:
         self.current_attempt = 0
         self.page = None
         self._should_continue = True
+        self._failure_captured = False
 
     def attempts(self):
         """生成重试迭代器"""
@@ -468,6 +568,7 @@ class BrowserRetryContext:
         """处理错误，决定是否继续重试"""
         log.error(f"流程异常: {error}")
         if self.current_attempt >= self.max_retries - 1:
+            self.capture_failure("exception")
             self._should_continue = False
         else:
             log.warning("准备重试...")
@@ -483,6 +584,7 @@ class BrowserRetryContext:
                 self.page.quit()
             except Exception:
                 pass
+            _clear_active_page(self.page)
             self.page = None
 
     def cleanup(self):
@@ -493,7 +595,14 @@ class BrowserRetryContext:
                 self.page.quit()
             except Exception:
                 pass
+            _clear_active_page(self.page)
             self.page = None
+
+    def capture_failure(self, reason: str | None = None) -> None:
+        if self._failure_captured:
+            return
+        capture_page_screenshot(self.page, reason=reason)
+        self._failure_captured = True
 
 
 def wait_for_page_stable(page, timeout: int = 10, check_interval: float = 0.5) -> bool:
@@ -2149,6 +2258,7 @@ def login_and_authorize_with_otp(email: str) -> tuple[bool, dict]:
                         if attempt < ctx.max_retries - 1:
                             log.warning("CPA OTP 授权失败，准备重试...")
                             continue
+                        ctx.capture_failure("cpa_otp_failed")
                         return False, None
                 else:
                     # CRS 模式: 使用 OTP 登录
@@ -2160,6 +2270,7 @@ def login_and_authorize_with_otp(email: str) -> tuple[bool, dict]:
                         if attempt < ctx.max_retries - 1:
                             log.warning("授权失败，准备重试...")
                             continue
+                        ctx.capture_failure("otp_authorize_failed")
                         return False, None
 
             except Exception as e:
@@ -2198,6 +2309,7 @@ def register_and_authorize(email: str, password: str) -> tuple:
                     if attempt < ctx.max_retries - 1:
                         log.warning("注册失败，准备重试...")
                         continue
+                    ctx.capture_failure("register_failed")
                     return False, None
 
                 # 短暂等待确保注册完成
@@ -2249,6 +2361,7 @@ def authorize_only(email: str, password: str) -> tuple[bool, dict]:
                         if attempt < ctx.max_retries - 1:
                             log.warning("CPA 授权失败，准备重试...")
                             continue
+                        ctx.capture_failure("cpa_authorize_failed")
                         return False, None
                 else:
                     # CRS 模式
@@ -2261,6 +2374,7 @@ def authorize_only(email: str, password: str) -> tuple[bool, dict]:
                         if attempt < ctx.max_retries - 1:
                             log.warning("授权失败，准备重试...")
                             continue
+                        ctx.capture_failure("authorize_failed")
                         return False, None
 
             except Exception as e:
@@ -3269,6 +3383,7 @@ def login_and_authorize_team_owner(
                     if attempt < ctx.max_retries - 1:
                         log.warning("登录失败，准备重试...")
                         continue
+                    ctx.capture_failure("login_failed")
                     return {"success": False}
 
                 token = session_data["token"]
@@ -3289,6 +3404,8 @@ def login_and_authorize_team_owner(
 
                 if AUTH_PROVIDER == "cpa":
                     success = perform_cpa_authorization(page, email, password)
+                    if not success:
+                        ctx.capture_failure("cpa_authorize_failed")
                     return {
                         "success": success,
                         "token": token,
@@ -3332,6 +3449,7 @@ def login_and_authorize_team_owner(
                         if attempt < ctx.max_retries - 1:
                             log.warning("授权失败，准备重试...")
                             continue
+                        ctx.capture_failure("authorize_failed")
                         return {
                             "success": False,
                             "token": token,
@@ -3366,6 +3484,7 @@ def login_and_authorize_team_owner(
                         if attempt < ctx.max_retries - 1:
                             log.warning("授权失败，准备重试...")
                             continue
+                        ctx.capture_failure("authorize_failed")
                         return {
                             "success": False,
                             "token": token,
