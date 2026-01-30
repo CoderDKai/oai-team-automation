@@ -933,10 +933,12 @@ def process_team_with_login(team: dict, team_index: int, total: int):
 
     if result.get("token"):
         team["auth_token"] = result["token"]
+        team["access_token"] = result["token"]
     if result.get("account_id"):
         team["account_id"] = result["account_id"]
-    if result.get("expires_at"):
+    if result.get("expires_at") is not None:
         team["expires_at"] = result["expires_at"]
+        team["token_expires_at"] = result["expires_at"]
     if result.get("authorized"):
         team["authorized"] = True
 
@@ -963,6 +965,15 @@ def process_team_with_login(team: dict, team_index: int, total: int):
     # 2. 添加 Owner 到 tracker (状态根据 authorized 决定)
     _tracker = load_team_tracker()
     add_team_owners_to_tracker(_tracker, DEFAULT_PASSWORD)
+    storage_check = result.get("storage_check")
+    if storage_check:
+        update_storage_status(
+            _tracker,
+            team["name"],
+            team["owner_email"],
+            AUTH_PROVIDER,
+            storage_check,
+        )
     save_team_tracker(_tracker)
 
     # 3. 处理该 Team 的成员

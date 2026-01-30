@@ -6,6 +6,7 @@ import time
 import random
 import subprocess
 import os
+from datetime import datetime
 from contextlib import contextmanager
 from DrissionPage import ChromiumPage, ChromiumOptions
 
@@ -35,6 +36,7 @@ from src.auth.cpa.client import (
 )
 from src.auth.s2a.client import s2a_generate_auth_url
 from src.core.logger import log
+from src.core.storage_manager import check_account_stored
 
 
 # ==================== 浏览器配置常量 ====================
@@ -47,6 +49,9 @@ PAGE_LOAD_TIMEOUT = 15  # 页面加载超时 (秒)
 SAFE_MODE = True
 TYPING_DELAY = 0.12 if SAFE_MODE else 0.06  # 打字基础延迟
 ACTION_DELAY = (1.0, 2.0) if SAFE_MODE else (0.3, 0.8)  # 操作间隔范围
+
+# ==================== 验证码时间窗口 ====================
+VERIFICATION_CODE_TIME_WINDOW_SECONDS = 120  # 进入验证码页后 2 分钟内有效
 
 
 # ==================== URL 监听与日志 ====================
@@ -132,6 +137,105 @@ def _parse_url_info(url: str) -> str:
             return "本地服务页"
 
     return ""
+
+
+def _parse_email_received_time(raw_time) -> datetime | None:
+    """解析邮件接收时间为本地时间"""
+    if raw_time is None:
+        return None
+
+    if isinstance(raw_time, (int, float)):
+        ts = float(raw_time)
+        if ts > 1_000_000_000_000:
+            ts /= 1000
+        return datetime.fromtimestamp(ts)
+
+    time_str = str(raw_time).strip()
+    if not time_str:
+        return None
+
+    if time_str.isdigit():
+        ts = float(time_str)
+        if ts > 1_000_000_000_000:
+            ts /= 1000
+        return datetime.fromtimestamp(ts)
+
+    normalized = time_str.replace("Z", "+00:00")
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+    ):
+        try:
+            return datetime.strptime(time_str, fmt)
+        except ValueError:
+            continue
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo:
+        return parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _is_email_time_valid(
+    email_time, entered_at: datetime | None, window_seconds: int = None
+) -> bool:
+    if not entered_at:
+        return True
+
+    if window_seconds is None:
+        window_seconds = VERIFICATION_CODE_TIME_WINDOW_SECONDS
+
+    parsed_time = _parse_email_received_time(email_time)
+    if not parsed_time:
+        log.warning("无法解析验证码邮件时间，跳过时间校验")
+        return True
+
+    delta_seconds = abs((parsed_time - entered_at).total_seconds())
+    if delta_seconds <= window_seconds:
+        return True
+
+    window_minutes = max(1, int(window_seconds / 60))
+    log.warning(
+        f"验证码邮件时间超出 {window_minutes} 分钟窗口，忽略旧验证码"
+    )
+    return False
+
+
+def get_verification_code_with_time_guard(
+    email: str,
+    entered_at: datetime | None,
+    max_time_retries: int = 3,
+    retry_wait: int = 10,
+) -> tuple[str | None, str | None, str | None]:
+    """获取验证码并校验时间窗口，超时则重试。"""
+    last_error = None
+    last_email_time = None
+
+    for attempt in range(1, max_time_retries + 1):
+        code, error, email_time = unified_get_verification_code(email)
+        last_error = error
+        last_email_time = email_time
+
+        if code and entered_at and not _is_email_time_valid(email_time, entered_at):
+            last_error = "验证码邮件时间超出有效窗口"
+            if attempt < max_time_retries:
+                log.info(
+                    f"等待 {retry_wait} 秒后重新获取验证码 ({attempt}/{max_time_retries})...",
+                    icon="wait",
+                )
+                time.sleep(retry_wait)
+                continue
+            return None, last_error, email_time
+
+        return code, error, email_time
+
+    return None, last_error or "未能获取验证码", last_email_time
 
 
 def log_url_change(page, old_url: str, action: str = None):
@@ -1097,8 +1201,11 @@ def register_openai_account(page, email: str, password: str) -> bool:
             return False
 
         # 获取验证码
+        verification_started_at = datetime.now()
         log.step("等待验证码邮件...")
-        verification_code, error, email_time = unified_get_verification_code(email)
+        verification_code, error, email_time = get_verification_code_with_time_guard(
+            email, verification_started_at
+        )
 
         if not verification_code:
             verification_code = input("   ⚠️ 请手动输入验证码: ").strip()
@@ -1196,8 +1303,11 @@ def register_openai_account(page, email: str, password: str) -> bool:
                             time.sleep(10)
 
                             # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
+                            verification_started_at = datetime.now()
                             verification_code, error, email_time = (
-                                unified_get_verification_code(email)
+                                get_verification_code_with_time_guard(
+                                    email, verification_started_at
+                                )
                             )
                             if not verification_code:
                                 verification_code = input(
@@ -1524,8 +1634,11 @@ def perform_codex_authorization(page, email: str, password: str) -> dict:
 
     current_url = page.url
     if "/email-verification" in current_url:
+        verification_started_at = datetime.now()
         log.step("等待验证码邮件...")
-        verification_code, error, email_time = unified_get_verification_code(email)
+        verification_code, error, email_time = get_verification_code_with_time_guard(
+            email, verification_started_at
+        )
 
         if not verification_code:
             log.warning(f"自动获取验证码失败: {error}")
@@ -1785,8 +1898,11 @@ def perform_codex_authorization_with_otp(page, email: str) -> dict:
     log_current_url(page, "OTP流程-准备获取验证码")
 
     # 等待并获取验证码
+    verification_started_at = datetime.now()
     log.step("等待验证码邮件...")
-    verification_code, error, email_time = unified_get_verification_code(email)
+    verification_code, error, email_time = get_verification_code_with_time_guard(
+        email, verification_started_at
+    )
 
     if not verification_code:
         log.warning(f"自动获取验证码失败: {error}")
@@ -1872,8 +1988,11 @@ def perform_codex_authorization_with_otp(page, email: str) -> dict:
                             time.sleep(10)
 
                             # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
+                            verification_started_at = datetime.now()
                             verification_code, error, email_time = (
-                                unified_get_verification_code(email)
+                                get_verification_code_with_time_guard(
+                                    email, verification_started_at
+                                )
                             )
                             if not verification_code:
                                 verification_code = input(
@@ -2410,8 +2529,11 @@ def perform_cpa_authorization_with_otp(page, email: str) -> bool:
     log_current_url(page, "CPA-OTP流程-准备获取验证码")
 
     # 等待并获取验证码
+    verification_started_at = datetime.now()
     log.step("等待验证码邮件...")
-    verification_code, error, email_time = unified_get_verification_code(email)
+    verification_code, error, email_time = get_verification_code_with_time_guard(
+        email, verification_started_at
+    )
 
     if not verification_code:
         log.warning(f"自动获取验证码失败: {error}")
@@ -2486,8 +2608,11 @@ def perform_cpa_authorization_with_otp(page, email: str) -> bool:
                             # 等待10秒让新邮件到达，避免获取到旧验证码
                             time.sleep(10)
                             # 重新获取验证码 (DomainMail 只获取未读邮件，旧邮件已标记为已读)
+                            verification_started_at = datetime.now()
                             verification_code, error, email_time = (
-                                unified_get_verification_code(email)
+                                get_verification_code_with_time_guard(
+                                    email, verification_started_at
+                                )
                             )
                             if not verification_code:
                                 verification_code = input(
@@ -2741,9 +2866,12 @@ def login_and_get_session(
                 log_current_url(page, "邮箱验证码页面")
 
                 if can_receive_verification_code:
+                    verification_started_at = datetime.now()
                     log.step("等待验证码邮件...")
                     verification_code, error, email_time = (
-                        unified_get_verification_code(email)
+                        get_verification_code_with_time_guard(
+                            email, verification_started_at
+                        )
                     )
 
                     if not verification_code:
@@ -2795,6 +2923,34 @@ def login_and_get_session(
                 else:
                     log.error("无法找到验证码输入框")
                     return None
+
+            # 步骤3: 处理工作区选择页面 (auth.openai.com/workspace)
+            if "auth.openai.com/workspace" in current_url:
+                log_current_url(page, "工作区选择页面")
+                log.info("检测到工作区选择页面，尝试选择第一个工作区...")
+
+                # 查找工作区选择按钮
+                workspace_buttons = page.eles('css:button[name="workspace_id"]', timeout=5)
+                if workspace_buttons and len(workspace_buttons) > 0:
+                    first_button = workspace_buttons[0]
+                    button_text = first_button.text if first_button.text else "Unknown"
+                    log.step(f"选择工作区: {button_text}")
+
+                    old_url = page.url
+                    first_button.click()
+                    time.sleep(2)
+
+                    # 等待页面跳转
+                    if wait_for_url_change(page, old_url, timeout=10):
+                        log.success("工作区选择成功")
+                        continue
+                    else:
+                        log.warning("工作区选择后页面未跳转")
+                        continue
+                else:
+                    log.warning("未找到工作区选择按钮，尝试继续...")
+                    time.sleep(1)
+                    continue
 
             # 处理错误
             if check_and_handle_error(page):
@@ -2851,8 +3007,11 @@ def _check_and_select_team_workspace_dialog(page) -> bool:
         log.info("检测到团队工作空间选择弹框")
 
         # 查找工作空间选项按钮
-        # 优先使用 class 选择器: button.group.__menu-item (同时具有 group 和 __menu-item 类)
-        menu_buttons = dialog.eles('css:button.group.__menu-item')
+        # 优先使用 name 选择器: button[name="workspace_id"]
+        menu_buttons = dialog.eles('css:button[name="workspace_id"]')
+        if not menu_buttons:
+            # 备选: 使用 class 选择器: button.group.__menu-item
+            menu_buttons = dialog.eles('css:button.group.__menu-item')
         if not menu_buttons:
             # 备选: 使用 role="radio" 选择器
             menu_buttons = dialog.eles('css:button[role="radio"]')
@@ -3016,12 +3175,8 @@ def _fetch_session_data(page) -> dict:
     try:
         import json as json_module
 
-        page.get("https://chatgpt.com")
-        time.sleep(1)
-
-        _check_and_select_team_workspace_dialog(page)
-        time.sleep(1)
-
+        # 不需要重新访问 chatgpt.com 和切换工作区
+        # 登录流程已经选择了正确的工作区
         log.step("获取 Session 数据...")
         page.get("https://chatgpt.com/api/auth/session")
         time.sleep(1)
@@ -3050,45 +3205,10 @@ def _fetch_session_data(page) -> dict:
             else:
                 log.warning("  account_id: 未获取到")
 
-            expires_at = 0
-            try:
-                log.step("获取 Team 订阅信息...")
-                page.get("https://chatgpt.com/backend-api/me")
-                time.sleep(1)
-
-                me_body = page.ele("tag:body", timeout=5)
-                if me_body:
-                    me_text = me_body.text
-                    if me_text and me_text != "{}":
-                        me_data = json_module.loads(me_text)
-                        accounts = me_data.get("accounts", {})
-
-                        if account_id and account_id in accounts:
-                            account_info = accounts[account_id]
-                            entitlement = account_info.get("entitlement", {})
-                            expires_at_str = entitlement.get("expires_at")
-
-                            if expires_at_str:
-                                from datetime import datetime
-
-                                expires_dt = datetime.fromisoformat(
-                                    expires_at_str.replace("Z", "+00:00")
-                                )
-                                expires_at = int(expires_dt.timestamp())
-                                log.success(
-                                    f"  expires_at: {expires_at} ({expires_at_str})"
-                                )
-                            else:
-                                log.warning("  expires_at: 未获取到")
-                        else:
-                            log.warning("  未找到当前账号的订阅信息")
-            except Exception as e:
-                log.warning(f"获取 Team 订阅信息失败: {e}")
-
             return {
                 "token": token,
                 "account_id": account_id or "",
-                "expires_at": expires_at,
+                "expires_at": 0,
             }
         else:
             log.error("Session 中没有 token")
@@ -3146,6 +3266,18 @@ def login_and_authorize_team_owner(
                 account_id = session_data["account_id"]
                 expires_at = session_data.get("expires_at", 0)
 
+                storage_check = check_account_stored(email, AUTH_PROVIDER)
+                if storage_check.get("exists"):
+                    log.success(f"账号已入库，跳过入库流程: {email}")
+                    return {
+                        "success": True,
+                        "token": token,
+                        "account_id": account_id,
+                        "expires_at": expires_at,
+                        "authorized": True,
+                        "storage_check": storage_check,
+                    }
+
                 if AUTH_PROVIDER == "cpa":
                     success = perform_cpa_authorization(page, email, password)
                     return {
@@ -3154,6 +3286,7 @@ def login_and_authorize_team_owner(
                         "account_id": account_id,
                         "expires_at": expires_at,
                         "authorized": success,
+                        "storage_check": {"status": "stored"} if success else None,
                     }
                 elif AUTH_PROVIDER == "s2a":
                     codex_data = perform_codex_authorization(page, email, password)
@@ -3177,6 +3310,14 @@ def login_and_authorize_team_owner(
                             "expires_at": expires_at,
                             "authorized": bool(s2a_result),
                             "s2a_id": s2a_result.get("id") if s2a_result else None,
+                            "storage_check": (
+                                {
+                                    "status": "stored",
+                                    "account_id": s2a_result.get("id") if s2a_result else None,
+                                }
+                                if s2a_result
+                                else None
+                            ),
                         }
                     else:
                         if attempt < ctx.max_retries - 1:
@@ -3188,6 +3329,7 @@ def login_and_authorize_team_owner(
                             "account_id": account_id,
                             "expires_at": expires_at,
                             "authorized": False,
+                            "storage_check": None,
                         }
                 else:
                     codex_data = perform_codex_authorization(page, email, password)
@@ -3202,6 +3344,14 @@ def login_and_authorize_team_owner(
                             "expires_at": expires_at,
                             "authorized": bool(crs_result),
                             "crs_id": crs_result.get("id") if crs_result else None,
+                            "storage_check": (
+                                {
+                                    "status": "stored",
+                                    "account_id": crs_result.get("id") if crs_result else None,
+                                }
+                                if crs_result
+                                else None
+                            ),
                         }
                     else:
                         if attempt < ctx.max_retries - 1:
@@ -3213,6 +3363,7 @@ def login_and_authorize_team_owner(
                             "account_id": account_id,
                             "expires_at": expires_at,
                             "authorized": False,
+                            "storage_check": None,
                         }
 
             except Exception as e:

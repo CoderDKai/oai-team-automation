@@ -226,10 +226,10 @@ class Logger:
         extra = {"icon": self._get_icon(icon), "is_highlight": True}
         self._logger.info(f"{prefix}{msg}", extra=extra)
 
-    def warning(self, msg: str, indent: int = 0):
+    def warning(self, msg: str, icon: str | None = None, indent: int = 0):
         """警告日志"""
         prefix = "  " * indent
-        extra = {"icon": self._get_icon("warning")}
+        extra = {"icon": self._get_icon(icon or "warning")}
         self._logger.warning(f"{prefix}{msg}", extra=extra)
 
     def error(self, msg: str, indent: int = 0):

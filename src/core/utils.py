@@ -472,6 +472,7 @@ def add_team_owners_to_tracker(tracker: dict, password: str) -> int:
                     "password": owner_password,
                     "status": status,
                     "role": "owner",
+                    "storage_status": _init_storage_status(),
                     "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }

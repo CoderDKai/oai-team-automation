@@ -257,10 +257,6 @@ def save_team_json():
                 if raw.get("access_token") != team["access_token"]:
                     raw["access_token"] = team["access_token"]
                     updated = True
-                # 同时更新旧字段 token 以保持兼容
-                if raw.get("token") != team["access_token"]:
-                    raw["token"] = team["access_token"]
-                    updated = True
             # 保存 refresh_token
             if team.get("refresh_token") and raw.get("refresh_token") != team["refresh_token"]:
                 raw["refresh_token"] = team["refresh_token"]
