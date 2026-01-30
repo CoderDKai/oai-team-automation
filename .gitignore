@@ -17,6 +17,7 @@ Thumbs.db
 config.toml
 team.json
 team_tracker.json
+team_tracker.json.lock
 accounts.csv
 accounts.json
 

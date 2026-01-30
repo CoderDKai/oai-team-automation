@@ -10,10 +10,10 @@ from datetime import datetime
 from contextlib import contextmanager
 from DrissionPage import ChromiumPage, ChromiumOptions
 
+import src.core.config as config
 from src.core.config import (
     BROWSER_WAIT_TIMEOUT,
     BROWSER_SHORT_WAIT,
-    BROWSER_HEADLESS,
     AUTH_PROVIDER,
     PROXY_ENABLED,
     get_random_name,
@@ -323,8 +323,8 @@ def init_browser(max_retries: int = BROWSER_MAX_RETRIES) -> ChromiumPage:
             co.auto_port()  # 自动分配端口，确保每次都是新实例
 
             # 无头模式 (服务器运行)
-            if BROWSER_HEADLESS:
-                co.set_argument("--headless=new")
+            if config.BROWSER_HEADLESS:
+                co.headless()
                 co.set_argument("--window-size=1920,1080")
                 log.step("启动 Chrome (无头模式)...")
             else:
